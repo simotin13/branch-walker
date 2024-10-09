@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	CS_ARCH_ARM   = C.CS_ARCH_ARM   // ARM architecture (including Thumb Thumb-2)
-	CS_ARCH_ARM64 = C.CS_ARCH_ARM64 // ARM-64, also called AArch64
-	CS_ARCH_X86   = C.CS_ARCH_X86   // X86 architecture (including x86 & x86-64)
-	CS_ARCH_RISCV = C.CS_ARCH_RISCV // RISCV architecture
+	CS_ARCH_ARM   = C.CS_ARCH_ARM     // ARM architecture (including Thumb Thumb-2)
+	CS_ARCH_ARM64 = C.CS_ARCH_AARCH64 // ARM-64, also called AArch64
+	CS_ARCH_X86   = C.CS_ARCH_X86     // X86 architecture (including x86 & x86-64)
+	CS_ARCH_RISCV = C.CS_ARCH_RISCV   // RISCV architecture
 )
 const (
 	// Engine modes

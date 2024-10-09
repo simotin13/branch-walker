@@ -61,7 +61,7 @@ func main() {
 	}
 	logger.ShowAppMsg("Machine Arch: %s(0x%X)\n", machinearchName, machineArch)
 	if machineArch == elf.MACHINE_ARCH_RISCV {
-		cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCV32)
+		cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCVC)
 		if err != nil {
 			logger.ShowErrorMsg("Failed to initialize capstone\n")
 			os.Exit(-1)
