@@ -12,6 +12,10 @@ import (
 )
 
 type Errno int
+// Getter for the last Errno from the engine. Normal code shouldn't need to
+// access this directly, but it's exported just in case.
+func (e *Capstone) Errno() error { return Errno(C.cs_errno(e.handle)) }
+
 func (e Errno) Error() string {
 	s := C.GoString(C.cs_strerror(C.cs_err(e)))
 	if s == "" {
@@ -397,7 +401,7 @@ func fillGenericHeader(c *Capstone, raw C.cs_insn, insn *Instruction) {
 	}
 }
 
-func (c *Capstone)decomposeX86(raws []C.cs_insn) []Instruction {
+func decomposeX86(c *Capstone, raws []C.cs_insn) []Instruction {
 	decomposed := []Instruction{}
 	for _, raw := range raws {
 		decomp := new(Instruction)
@@ -415,43 +419,51 @@ func New(arch int, mode int) (*Capstone, error) {
 	}
 	return &Capstone{handle: handle, arch: arch, mode: mode}, nil
 }
-func (c *Capstone) Disasm(code []byte, address, count uint64) ([]Instruction, error) {
+
+// Disassemble a []byte full of opcodes.
+//   * address - Address of the first instruction in the given code buffer.
+//   * count - Number of instructions to disassemble, 0 to disassemble the whole []byte
+//
+// Underlying C resources are automatically free'd by this function.
+func (c *Capstone) Disasm(input []byte, address, count uint64) ([]Instruction, error) {
+
 	var insn *C.cs_insn
-	bptr := (*C.uint8_t)(unsafe.Pointer(&code[0]))
+	bptr := (*C.uint8_t)(unsafe.Pointer(&input[0]))
 	disassembled := C.cs_disasm(
 		c.handle,
 		bptr,
-		C.size_t(len(code)),
+		C.size_t(len(input)),
 		C.uint64_t(address),
 		C.size_t(count),
 		&insn,
 	)
-	if disassembled < 1 {
-		return nil, fmt.Errorf("Failed to disassemble")
-	}
-	defer C.cs_free(insn, C.size_t(disassembled))
-	// Create a slice, and reflect its header
-	var insns []C.cs_insn
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&insns))
-	// Manually fill in the ptr, len and cap from the raw C data
-	h.Data = uintptr(unsafe.Pointer(insn))
-	h.Len = int(disassembled)
-	h.Cap = int(disassembled)
 
-	instructions := make([]Instruction, disassembled)
-	/*
-	for i, instruction := range insns {
-		bslice := make([]byte, instruction.size)
-		for i := 0; i < int(instruction.size); i++ {
-			bslice[i] = byte(instruction.bytes[i])
-		}
-		instructions[i] = Instruction{
-			Address:  uint64(instruction.address),
-			Mnemonic: C.GoString(&instruction.mnemonic[0]),
-			OpStr:    C.GoString(&instruction.op_str[0]),
-			Bytes:    bslice,
+	if disassembled > 0 {
+		defer C.cs_free((*C.cs_insn)(unsafe.Pointer(insn)), C.size_t(disassembled))
+		// Create a slice, and reflect its header
+		var insns []C.cs_insn
+		h := (*reflect.SliceHeader)(unsafe.Pointer(&insns))
+		// Manually fill in the ptr, len and cap from the raw C data
+		h.Data = uintptr(unsafe.Pointer(insn))
+		h.Len = int(disassembled)
+		h.Cap = int(disassembled)
+
+		switch c.arch {
+		case CS_ARCH_X86:
+			return decomposeX86(c, insns), nil
+		default:
+			return decomposeGeneric(c, insns), nil
 		}
 	}
-	*/
-	return instructions, nil
+	return []Instruction{}, c.Errno()
+}
+
+func decomposeGeneric(c *Capstone, raws []C.cs_insn) []Instruction {
+	decomposed := []Instruction{}
+	for _, raw := range raws {
+		decomp := new(Instruction)
+		fillGenericHeader(c, raw, decomp)
+		decomposed = append(decomposed, *decomp)
+	}
+	return decomposed
 }
