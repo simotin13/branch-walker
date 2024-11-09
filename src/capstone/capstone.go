@@ -118,7 +118,7 @@ const (
 
 const (
 	CS_ARCH_ARM   = C.CS_ARCH_ARM   // ARM architecture (including Thumb Thumb-2)
-	CS_ARCH_ARM64 = C.CS_ARCH_ARM64 // ARM-64, also called AArch64
+	//CS_ARCH_ARM64 = C.CS_ARCH_ARM64 // ARM-64, also called AArch64
 	CS_ARCH_X86   = C.CS_ARCH_X86   // X86 architecture (including x86 & x86-64)
 	CS_ARCH_RISCV = C.CS_ARCH_RISCV // RISCV architecture
 )
@@ -174,43 +174,8 @@ type Instruction struct {
 	X86 *X86Instruction
 	//Arm64 *Arm64Instruction
 	//Arm   *ArmInstruction
+	Riscv *RiscvInstruction
 }
-
-/*
-//> Operand type for instruction's operands
-typedef enum riscv_op_type {
-	RISCV_OP_INVALID = 0, // = CS_OP_INVALID (Uninitialized).
-	RISCV_OP_REG, // = CS_OP_REG (Register operand).
-	RISCV_OP_IMM, // = CS_OP_IMM (Immediate operand).
-	RISCV_OP_MEM, // = CS_OP_MEM (Memory operand).
-} riscv_op_type;
-
-// Instruction's operand referring to memory
-// This is associated with RISCV_OP_MEM operand type above
-typedef struct riscv_op_mem {
-	unsigned int base;	// base register
-	int64_t disp;	// displacement/offset value
-} riscv_op_mem;
-
-// Instruction operand
-typedef struct cs_riscv_op {
-	riscv_op_type type;	// operand type
-	union {
-		unsigned int reg;	// register value for REG operand
-		int64_t imm;		// immediate value for IMM operand
-		riscv_op_mem mem;	// base/disp value for MEM operand
-	};
-} cs_riscv_op;
-
-typedef struct cs_riscv {
-	// Does this instruction need effective address or not.
-	bool need_effective_addr;
-	// Number of operands of this instruction,
-	// or 0 when instruction has no operand.
-	uint8_t op_count;
-	cs_riscv_op operands[8]; // operands for this instruction.
-} cs_riscv;
-*/
 
 const (
 	RISCV_OP_INVALID = C.RISCV_OP_INVALID
@@ -227,6 +192,7 @@ type RiscvOperand struct {
 	Type uint
 	Reg  uint
 	Imm  int64
+	Access uint8
 	Mem  RiscvMemoryOperand
 }
 
@@ -302,88 +268,42 @@ func fillRiscvHeader(raw C.cs_insn, insn *Instruction) {
 	}
 
 	// Cast the cs_detail union
-	//cs_riscv := (*C.cs_riscv)(unsafe.Pointer(&raw.detail.anon0[0]))
-	/*
-	   	x86 := X86Instruction{
-	   		Prefix:   pref,
-	   		Opcode:   opc,
-	   		Rex:      byte(cs_x86.rex),
-	   		AddrSize: byte(cs_x86.addr_size),
-	   		ModRM:    byte(cs_x86.modrm),
-	   		Sib:      byte(cs_x86.sib),
-	   		Disp:     int64(cs_x86.disp),
-	   		SibIndex: uint(cs_x86.sib_index),
-	   		SibScale: int8(cs_x86.sib_scale),
-	   		SibBase:  uint(cs_x86.sib_base),
-	   		XopCC:    uint(cs_x86.xop_cc),
-	   		SseCC:    uint(cs_x86.sse_cc),
-	   		AvxCC:    uint(cs_x86.avx_cc),
-	   		AvxSAE:   bool(cs_x86.avx_sae),
-	   		AvxRM:    uint(cs_x86.avx_rm),
-	   		Encoding: X86Encoding{
-	   			ModRMOffset: byte(cs_x86.encoding.modrm_offset),
-	   			DispOffset:  byte(cs_x86.encoding.disp_offset),
-	   			DispSize:    byte(cs_x86.encoding.disp_size),
-	   			ImmOffset:   byte(cs_x86.encoding.imm_offset),
-	   			ImmSize:     byte(cs_x86.encoding.imm_size),
-	   		},
-	   	}
+	cs_riscv := (*C.cs_riscv)(unsafe.Pointer(&raw.detail.anon0[0]))
 
-	   // Handle eflags and fpu_flags union
-	   x86.EFlags = uint64(*(*C.uint64_t)(unsafe.Pointer(&cs_x86.anon0[0])))
+	riscv := RiscvInstruction{
+		NeedEffectiveAddr: bool(cs_riscv.need_effective_addr),
+		OpCount: byte(cs_riscv.op_count),
+	}
 
-	   	for _, group := range insn.Groups {
-	   		if group == X86_GRP_FPU {
-	   			x86.EFlags = 0
-	   			x86.FPUFlags = uint64(*(*C.uint64_t)(unsafe.Pointer(&cs_x86.anon0[0])))
-	   			break
-	   		}
-	   	}
+	var ops []C.cs_riscv_op
+	oih := (*reflect.SliceHeader)(unsafe.Pointer(&ops))
+	oih.Data = uintptr(unsafe.Pointer(&cs_riscv.operands[0]))
+	oih.Len = int(cs_riscv.op_count)
+	oih.Cap = int(cs_riscv.op_count)
+	for _, cop := range ops {
+		if cop._type == RISCV_OP_INVALID {
+			break
+		}
+		gop := RiscvOperand{
+			Type: uint(cop._type),
+			Access: uint8(cop.access),
+		}
+	
+		switch cop._type {
+		case RISCV_OP_REG:
+			gop.Reg = uint(*(*C.uint)(unsafe.Pointer(&cop.anon0[0])))
+		case RISCV_OP_IMM:
+			gop.Imm = int64(*(*C.int64_t)(unsafe.Pointer(&cop.anon0[0])))
+		case RISCV_OP_MEM:
+			cop_mem := (*C.riscv_op_mem)(unsafe.Pointer(&cop.anon0[0]))
+			gop.Mem.Base = uint(cop_mem.base)
+			gop.Mem.Disp = int64(cop_mem.disp)
+		}
 
-	   // Cast the op_info to a []C.cs_x86_op
-	   var ops []C.cs_x86_op
-	   oih := (*reflect.SliceHeader)(unsafe.Pointer(&ops))
-	   oih.Data = uintptr(unsafe.Pointer(&cs_x86.operands[0]))
-	   oih.Len = int(cs_x86.op_count)
-	   oih.Cap = int(cs_x86.op_count)
+		riscv.Operands = append(riscv.Operands, gop)
+	}
 
-	   // Create the Go object for each operand
-	   for _, cop := range ops {
-
-	   		if cop._type == X86_OP_INVALID {
-	   			break
-	   		}
-
-	   		gop := X86Operand{
-	   			Type:          uint(cop._type),
-	   			Size:          uint8(cop.size),
-	   			Access:        uint8(cop.access),
-	   			AvxBcast:      uint(cop.avx_bcast),
-	   			AvxZeroOpmask: bool(cop.avx_zero_opmask),
-	   		}
-
-	   		switch cop._type {
-	   		// fake a union by setting only the correct struct member
-	   		case X86_OP_IMM:
-	   			gop.Imm = int64(*(*C.int64_t)(unsafe.Pointer(&cop.anon0[0])))
-	   		case X86_OP_REG:
-	   			gop.Reg = uint(*(*C.uint)(unsafe.Pointer(&cop.anon0[0])))
-	   		case X86_OP_MEM:
-	   			cmop := (*C.x86_op_mem)(unsafe.Pointer(&cop.anon0[0]))
-	   			gop.Mem = X86MemoryOperand{
-	   				Segment: uint(cmop.segment),
-	   				Base:    uint(cmop.base),
-	   				Index:   uint(cmop.index),
-	   				Scale:   int(cmop.scale),
-	   				Disp:    int64(cmop.disp),
-	   			}
-	   		}
-
-	   		x86.Operands = append(x86.Operands, gop)
-	   	}
-
-	   insn.X86 = &x86
-	*/
+	insn.Riscv = &riscv
 }
 
 func fillX86Header(raw C.cs_insn, insn *Instruction) {
