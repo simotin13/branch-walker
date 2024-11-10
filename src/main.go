@@ -9,6 +9,14 @@ import (
 	"path/filepath"
 )
 
+func reverse(data []byte) []byte {
+    reversed := make([]byte, len(data))
+    copy(reversed, data)
+    for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+        reversed[i], reversed[j] = reversed[j], reversed[i]
+    }
+    return reversed
+}
 func main() {
 	logger.Setup("branch-walker", logger.TRACE, false)
 	if len(os.Args) < 2 {
@@ -72,7 +80,8 @@ func main() {
 			os.Exit(-1)
 		}
 		for _, insn := range insns {
-			logger.ShowAppMsg("0x%x:\t%s\t%s\n", insn.Address, insn.Mnemonic, insn.OpStr)
+			le_bytes := reverse(insn.Bytes)
+			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr)
 		}
 	}
 }
