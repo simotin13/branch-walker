@@ -192,7 +192,8 @@ type RiscvOperand struct {
 	Type uint
 	Reg  uint
 	Imm  int64
-	Access uint8
+	// access field is supported later 6.0.0
+	// Access uint8
 	Mem  RiscvMemoryOperand
 }
 
@@ -286,7 +287,6 @@ func fillRiscvHeader(raw C.cs_insn, insn *Instruction) {
 		}
 		gop := RiscvOperand{
 			Type: uint(cop._type),
-			Access: uint8(cop.access),
 		}
 	
 		switch cop._type {
