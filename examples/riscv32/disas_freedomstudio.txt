@@ -1,0 +1,40 @@
+20010192:   lw      a5,-24(s0)
+20010196:   add     a5,a5,a4
+20010198:   mv      a0,a5
+2001019a:   lw      s0,28(sp)
+2001019c:   addi    sp,sp,32
+2001019e:   ret     
+          main:
+200101a0:   addi    sp,sp,-32
+200101a2:   sw      ra,28(sp)
+200101a4:   sw      s0,24(sp)
+200101a6:   addi    s0,sp,32
+ 7            int sum = 0;
+200101a8:   sw      zero,-20(s0)
+ 8            sum = add(1, 2);
+200101ac:   li      a1,2
+200101ae:   li      a0,1
+200101b0:   jal     0x20010180 <add>
+200101b2:   sw      a0,-20(s0)
+ 9            if (sum == 10)
+200101b6:   lw      a4,-20(s0)
+200101ba:   li      a5,10
+200101bc:   bne     a4,a5,0x200101cc <main+44>
+11                printf("sum is 10\n");
+200101c0:   lui     a5,0x20014
+200101c4:   addi    a0,a5,384 # 0x20014180
+200101c8:   jal     0x20010252 <puts>
+200101ca:   j       0x200101d6 <main+54>
+13                printf("sum is not 10\n");
+200101cc:   lui     a5,0x20014
+200101d0:   addi    a0,a5,396 # 0x2001418c
+200101d4:   jal     0x20010252 <puts>
+15            return 0;
+200101d6:   li      a5,0
+16        }
+200101d8:   mv      a0,a5
+200101da:   lw      ra,28(sp)
+200101dc:   lw      s0,24(sp)
+200101de:   addi    sp,sp,32
+200101e0:   ret     
+
