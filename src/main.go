@@ -89,6 +89,10 @@ func main() {
 		for _, insn := range insns {
 			le_bytes := reverse(insn.Bytes)
 			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr)
+			logger.ShowAppMsg("NeedEffectiveAddr:%t, OpCount:%d", insn.Riscv.NeedEffectiveAddr, insn.Riscv.OpCount)
+			for _, op := range insn.Riscv.Operands {
+				logger.ShowAppMsg("Type:%d, Reg:%d, Imm:%d", op.Type, op.Reg, op.Imm)
+			}
 		}
 	}
 }

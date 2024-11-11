@@ -117,7 +117,7 @@ const (
 )
 
 const (
-	CS_ARCH_ARM   = C.CS_ARCH_ARM   // ARM architecture (including Thumb Thumb-2)
+	CS_ARCH_ARM = C.CS_ARCH_ARM // ARM architecture (including Thumb Thumb-2)
 	//CS_ARCH_ARM64 = C.CS_ARCH_ARM64 // ARM-64, also called AArch64
 	CS_ARCH_X86   = C.CS_ARCH_X86   // X86 architecture (including x86 & x86-64)
 	CS_ARCH_RISCV = C.CS_ARCH_RISCV // RISCV architecture
@@ -138,28 +138,28 @@ const (
 	CS_MODE_RISCVC        = C.CS_MODE_RISCVC        // RISCV compressed instructure mode
 )
 
-const(
-	CS_OPT_INVALID = C.CS_OPT_INVALID
-	CS_OPT_SYNTAX = C.CS_OPT_SYNTAX
-	CS_OPT_DETAIL = C.CS_OPT_DETAIL
-	CS_OPT_MODE = C.CS_OPT_MODE
-	CS_OPT_MEM = C.CS_OPT_MEM
-	CS_OPT_SKIPDATA = C.CS_OPT_SKIPDATA
-	CS_OPT_SKIPDATA_SETUP = C.CS_OPT_SKIPDATA_SETUP
-	CS_OPT_MNEMONIC = C.CS_OPT_MNEMONIC
-	CS_OPT_UNSIGNED = C.CS_OPT_UNSIGNED
+const (
+	CS_OPT_INVALID          = C.CS_OPT_INVALID
+	CS_OPT_SYNTAX           = C.CS_OPT_SYNTAX
+	CS_OPT_DETAIL           = C.CS_OPT_DETAIL
+	CS_OPT_MODE             = C.CS_OPT_MODE
+	CS_OPT_MEM              = C.CS_OPT_MEM
+	CS_OPT_SKIPDATA         = C.CS_OPT_SKIPDATA
+	CS_OPT_SKIPDATA_SETUP   = C.CS_OPT_SKIPDATA_SETUP
+	CS_OPT_MNEMONIC         = C.CS_OPT_MNEMONIC
+	CS_OPT_UNSIGNED         = C.CS_OPT_UNSIGNED
 	CS_OPT_NO_BRANCH_OFFSET = C.CS_OPT_NO_BRANCH_OFFSET
 )
 
 const (
-	CS_OPT_OFF = C.CS_OPT_OFF
-	CS_OPT_ON  = C.CS_OPT_ON
-	CS_OPT_SYNTAX_DEFAULT = C.CS_OPT_SYNTAX_DEFAULT
-	CS_OPT_SYNTAX_INTEL = C.CS_OPT_SYNTAX_INTEL
-	CS_OPT_SYNTAX_ATT = C.CS_OPT_SYNTAX_ATT
+	CS_OPT_OFF              = C.CS_OPT_OFF
+	CS_OPT_ON               = C.CS_OPT_ON
+	CS_OPT_SYNTAX_DEFAULT   = C.CS_OPT_SYNTAX_DEFAULT
+	CS_OPT_SYNTAX_INTEL     = C.CS_OPT_SYNTAX_INTEL
+	CS_OPT_SYNTAX_ATT       = C.CS_OPT_SYNTAX_ATT
 	CS_OPT_SYNTAX_NOREGNAME = C.CS_OPT_SYNTAX_NOREGNAME
-	CS_OPT_SYNTAX_MASM = C.CS_OPT_SYNTAX_MASM
-	CS_OPT_SYNTAX_MOTOROLA = C.CS_OPT_SYNTAX_MOTOROLA
+	CS_OPT_SYNTAX_MASM      = C.CS_OPT_SYNTAX_MASM
+	CS_OPT_SYNTAX_MOTOROLA  = C.CS_OPT_SYNTAX_MOTOROLA
 )
 
 type Capstone struct {
@@ -218,7 +218,7 @@ type RiscvOperand struct {
 	Imm  int64
 	// access field is supported later 6.0.0
 	// Access uint8
-	Mem  RiscvMemoryOperand
+	Mem RiscvMemoryOperand
 }
 
 type RiscvInstruction struct {
@@ -297,7 +297,7 @@ func fillRiscvHeader(raw C.cs_insn, insn *Instruction) {
 
 	riscv := RiscvInstruction{
 		NeedEffectiveAddr: bool(cs_riscv.need_effective_addr),
-		OpCount: byte(cs_riscv.op_count),
+		OpCount:           byte(cs_riscv.op_count),
 	}
 
 	var ops []C.cs_riscv_op
@@ -312,7 +312,7 @@ func fillRiscvHeader(raw C.cs_insn, insn *Instruction) {
 		gop := RiscvOperand{
 			Type: uint(cop._type),
 		}
-	
+
 		switch cop._type {
 		case RISCV_OP_REG:
 			gop.Reg = uint(*(*C.uint)(unsafe.Pointer(&cop.anon0[0])))
@@ -486,6 +486,17 @@ func fillGenericHeader(c *Capstone, raw C.cs_insn, insn *Instruction) {
 	}
 }
 
+func decomposeRiscV(c *Capstone, raws []C.cs_insn) []Instruction {
+	decomposed := []Instruction{}
+	for _, raw := range raws {
+		decomp := new(Instruction)
+		fillGenericHeader(c, raw, decomp)
+		fillRiscvHeader(raw, decomp)
+		decomposed = append(decomposed, *decomp)
+	}
+	return decomposed
+}
+
 func decomposeX86(c *Capstone, raws []C.cs_insn) []Instruction {
 	decomposed := []Instruction{}
 	for _, raw := range raws {
@@ -496,7 +507,6 @@ func decomposeX86(c *Capstone, raws []C.cs_insn) []Instruction {
 	}
 	return decomposed
 }
-
 
 func decomposeGeneric(c *Capstone, raws []C.cs_insn) []Instruction {
 	decomposed := []Instruction{}
@@ -548,6 +558,8 @@ func (c *Capstone) Disasm(input []byte, address, count uint64) ([]Instruction, e
 		switch c.arch {
 		case CS_ARCH_X86:
 			return decomposeX86(c, insns), nil
+		case CS_ARCH_RISCV:
+			return decomposeRiscV(c, insns), nil
 		default:
 			return decomposeGeneric(c, insns), nil
 		}
