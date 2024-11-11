@@ -74,6 +74,13 @@ func main() {
 			logger.ShowErrorMsg("Failed to initialize capstone\n")
 			os.Exit(-1)
 		}
+		
+		err = cs.Option(capstone.CS_OPT_DETAIL, capstone.CS_OPT_ON)
+		if err != nil {
+			logger.ShowErrorMsg("Failed to cs_option\n")
+			os.Exit(-1)
+		}
+
 		insns, err := cs.Disasm(textSh, 0, 0)
 		if err != nil {
 			logger.ShowErrorMsg("Failed to disassemble\n")

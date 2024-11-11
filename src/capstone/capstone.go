@@ -138,6 +138,30 @@ const (
 	CS_MODE_RISCVC        = C.CS_MODE_RISCVC        // RISCV compressed instructure mode
 )
 
+const(
+	CS_OPT_INVALID = C.CS_OPT_INVALID
+	CS_OPT_SYNTAX = C.CS_OPT_SYNTAX
+	CS_OPT_DETAIL = C.CS_OPT_DETAIL
+	CS_OPT_MODE = C.CS_OPT_MODE
+	CS_OPT_MEM = C.CS_OPT_MEM
+	CS_OPT_SKIPDATA = C.CS_OPT_SKIPDATA
+	CS_OPT_SKIPDATA_SETUP = C.CS_OPT_SKIPDATA_SETUP
+	CS_OPT_MNEMONIC = C.CS_OPT_MNEMONIC
+	CS_OPT_UNSIGNED = C.CS_OPT_UNSIGNED
+	CS_OPT_NO_BRANCH_OFFSET = C.CS_OPT_NO_BRANCH_OFFSET
+)
+
+const (
+	CS_OPT_OFF = C.CS_OPT_OFF
+	CS_OPT_ON  = C.CS_OPT_ON
+	CS_OPT_SYNTAX_DEFAULT = C.CS_OPT_SYNTAX_DEFAULT
+	CS_OPT_SYNTAX_INTEL = C.CS_OPT_SYNTAX_INTEL
+	CS_OPT_SYNTAX_ATT = C.CS_OPT_SYNTAX_ATT
+	CS_OPT_SYNTAX_NOREGNAME = C.CS_OPT_SYNTAX_NOREGNAME
+	CS_OPT_SYNTAX_MASM = C.CS_OPT_SYNTAX_MASM
+	CS_OPT_SYNTAX_MOTOROLA = C.CS_OPT_SYNTAX_MOTOROLA
+)
+
 type Capstone struct {
 	handle C.csh
 	arch   int
@@ -472,6 +496,18 @@ func decomposeX86(c *Capstone, raws []C.cs_insn) []Instruction {
 	}
 	return decomposed
 }
+
+
+func decomposeGeneric(c *Capstone, raws []C.cs_insn) []Instruction {
+	decomposed := []Instruction{}
+	for _, raw := range raws {
+		decomp := new(Instruction)
+		fillGenericHeader(c, raw, decomp)
+		decomposed = append(decomposed, *decomp)
+	}
+	return decomposed
+}
+
 func New(arch int, mode int) (*Capstone, error) {
 	var handle C.csh
 	ret := C.cs_open(C.cs_arch(arch), C.cs_mode(mode), &handle)
@@ -519,12 +555,11 @@ func (c *Capstone) Disasm(input []byte, address, count uint64) ([]Instruction, e
 	return []Instruction{}, c.Errno()
 }
 
-func decomposeGeneric(c *Capstone, raws []C.cs_insn) []Instruction {
-	decomposed := []Instruction{}
-	for _, raw := range raws {
-		decomp := new(Instruction)
-		fillGenericHeader(c, raw, decomp)
-		decomposed = append(decomposed, *decomp)
+func (c *Capstone) Option(opt_type C.cs_opt_type, opt_value C.size_t) error {
+	ret := C.cs_option(c.handle, opt_type, opt_value)
+	if ret != C.CS_ERR_OK {
+		return fmt.Errorf("Failed to cs_option")
 	}
-	return decomposed
+
+	return nil
 }
