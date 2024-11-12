@@ -10,12 +10,12 @@ import (
 )
 
 func reverse(data []byte) []byte {
-    reversed := make([]byte, len(data))
-    copy(reversed, data)
-    for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
-        reversed[i], reversed[j] = reversed[j], reversed[i]
-    }
-    return reversed
+	reversed := make([]byte, len(data))
+	copy(reversed, data)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return reversed
 }
 func main() {
 	logger.Setup("branch-walker", logger.TRACE, false)
@@ -74,7 +74,7 @@ func main() {
 			logger.ShowErrorMsg("Failed to initialize capstone\n")
 			os.Exit(-1)
 		}
-		
+
 		err = cs.Option(capstone.CS_OPT_DETAIL, capstone.CS_OPT_ON)
 		if err != nil {
 			logger.ShowErrorMsg("Failed to cs_option\n")
@@ -89,9 +89,11 @@ func main() {
 		for _, insn := range insns {
 			le_bytes := reverse(insn.Bytes)
 			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr)
-			logger.ShowAppMsg("NeedEffectiveAddr:%t, OpCount:%d", insn.Riscv.NeedEffectiveAddr, insn.Riscv.OpCount)
-			for _, op := range insn.Riscv.Operands {
-				logger.ShowAppMsg("Type:%d, Reg:%d, Imm:%d", op.Type, op.Reg, op.Imm)
+			logger.ShowAppMsg("NeedEffectiveAddr:%t, OpCount:%d\n", insn.Riscv.NeedEffectiveAddr, insn.Riscv.OpCount)
+			for i, op := range insn.Riscv.Operands {
+				type_name := capstone.GetRiscVOperandTypeName(op.Type)
+				reg_name := capstone.GetRiscVRegName(op.Reg)
+				logger.ShowAppMsg("Operand:%d, Type:%s, Reg:%s, Imm:%d\n", i, type_name, reg_name, op.Imm)
 			}
 		}
 	}
