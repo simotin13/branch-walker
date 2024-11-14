@@ -88,12 +88,19 @@ func main() {
 		}
 		for _, insn := range insns {
 			le_bytes := reverse(insn.Bytes)
-			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr)
-			logger.ShowAppMsg("NeedEffectiveAddr:%t, OpCount:%d\n", insn.Riscv.NeedEffectiveAddr, insn.Riscv.OpCount)
+			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 			for i, op := range insn.Riscv.Operands {
 				type_name := capstone.GetRiscVOperandTypeName(op.Type)
-				reg_name := capstone.GetRiscVRegName(op.Reg)
-				logger.ShowAppMsg("Operand:%d, Type:%s, Reg:%s, Imm:%d\n", i, type_name, reg_name, op.Imm)
+				switch op.Type {
+				case capstone.RISCV_OP_REG:
+					reg_name := capstone.GetRiscVRegName(op.Reg)
+					logger.ShowAppMsg("        Operand:%d, Type:%s, Reg:%s\n", i, type_name, reg_name)
+				case capstone.RISCV_OP_IMM:
+					logger.ShowAppMsg("        Operand:%d, Type:%s, Imm:%d\n", i, type_name, op.Imm)
+				case capstone.RISCV_OP_MEM:
+					reg_name := capstone.GetRiscVRegName(op.Mem.Base)
+					logger.ShowAppMsg("        Operand:%d, Type:%s, Base:%s, Disp:%d\n", i, type_name, reg_name, op.Mem.Disp)
+				}
 			}
 		}
 	}
