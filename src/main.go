@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func reverse(data []byte) []byte {
@@ -78,15 +79,18 @@ func main() {
 
 		funcInfos := targetObj.GetFuncsInfos()
 		for _, elfFuncInfo := range funcInfos {
+			if elfFuncInfo.Name != "main" {
+				continue
+			}
 			load_addr, err := targetObj.GetSectionLoadAddrByName(elfFuncInfo.SecName)
 			if err != nil {
 				logger.ShowErrorMsg("Failed to disassemble\n")
 				os.Exit(-1)
 			}
 
-			f_start := elfFuncInfo.Addr - load_addr
-			f_end := f_start + elfFuncInfo.Size
-			logger.DLog("Disassemble Name:%s, Addr:0x%X, Offset:0x%X, Size:%d, SecName:%s, LoadAddr:0x%X\n", elfFuncInfo.Name, elfFuncInfo.Addr, f_start, elfFuncInfo.Size, elfFuncInfo.SecName, load_addr)
+			fStart := elfFuncInfo.Addr - load_addr
+			fEnd := fStart + elfFuncInfo.Size
+			logger.DLog("Disassemble Name:%s, Addr:0x%X, Offset:0x%X, Size:%d, SecName:%s, LoadAddr:0x%X\n", elfFuncInfo.Name, elfFuncInfo.Addr, fStart, elfFuncInfo.Size, elfFuncInfo.SecName, load_addr)
 			secBin := targetObj.GetSectionBinByName(elfFuncInfo.SecName)
 			if secBin == nil {
 				logger.ShowErrorMsg("Cannot find .text section\n")
@@ -96,14 +100,14 @@ func main() {
 				logger.DLog("func '%s' size is 0\n", elfFuncInfo.Name)
 				continue
 			}
-			f_bin := secBin[f_start:f_end]
-			insns, err := cs.Disasm(f_bin, f_start, 0)
+			f_bin := secBin[fStart:fEnd]
+			insns, err := cs.Disasm(f_bin, fStart, 0)
 			if err != nil {
 				logger.ShowErrorMsg("Failed to disassemble\n")
 				os.Exit(-1)
 			}
-			//rev_insns := ReverseInsns(insns);
-			for _, insn := range insns {
+			rev_insns := capstone.ReverseInsns(insns);
+			for _, insn := range rev_insns {
 				le_bytes := reverse(insn.Bytes)
 				logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 				for i, op := range insn.Riscv.Operands {
@@ -119,7 +123,19 @@ func main() {
 						logger.ShowAppMsg("        Operand:%d, Type:%s, Base:%s, Disp:%d\n", i, type_name, reg_name, op.Mem.Disp)
 					}
 				}
+				if isBranchInsn(insn) {
+					logger.ShowAppMsg("banch found!!!\n")
+				}
 			}
 		}
 	}
+}
+
+func isBranchInsn(insn capstone.Instruction) bool {
+	nm := strings.ToUpper(insn.Mnemonic)
+	if nm == "BNE" {
+		return true
+	}
+
+	return false
 }
