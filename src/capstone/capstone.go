@@ -809,6 +809,15 @@ func (c *Capstone) Option(opt_type C.cs_opt_type, opt_value C.size_t) error {
 	return nil
 }
 
+func ReverseInsns(insns []Instruction) []Instruction {
+	rev_insns := make([]Instruction, len(insns))
+	copy(rev_insns, insns)
+	for i, j := 0, len(rev_insns)-1; i < j; i, j = i+1, j-1 {
+		rev_insns[i], rev_insns[j] = rev_insns[j], rev_insns[i]
+	}
+	return rev_insns
+}
+
 func GetRiscVOperandTypeName(operand_type uint) string {
 	operand_type_name := "UNKOWN"
 	switch operand_type {

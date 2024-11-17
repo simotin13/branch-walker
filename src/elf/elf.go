@@ -431,6 +431,7 @@ type ElfObject interface {
 	GetMachineArch() uint16
 	GetMachineArchName() string
 	ShowElfHeaderInfo()
+	GetSectionLoadAddrByName(name string) (uint64, error)
 	GetSectionBinByName(name string) []byte
 	HasSection(name string) bool
 	GetFuncIdxByAddr(addr uint64) int
@@ -683,6 +684,14 @@ func (elfObj Elf64Object) ShowElfHeaderInfo() {
 	elfObj.Elf64Ehdr.ShowElfHeaderInfo()
 }
 
+func (elfObj Elf32Object) GetSectionLoadAddrByName(name string) (uint64, error) {
+	shIdx, exist := elfObj.SectionNameMap[name]
+	if !exist {
+		return 0, errors.New("section %s not found")
+	}
+	return (uint64)(elfObj.Shdrs[shIdx].Sh_addr), nil
+}
+
 func (elfObj Elf32Object) GetSectionBinByName(name string) []byte {
 	shIdx, exist := elfObj.SectionNameMap[name]
 	if !exist {
@@ -693,6 +702,13 @@ func (elfObj Elf32Object) GetSectionBinByName(name string) []byte {
 	return elfObj.Bin[sh.Sh_offset:endOffset]
 }
 
+func (elfObj Elf64Object) GetSectionLoadAddrByName(name string) (uint64, error) {
+	shIdx, exist := elfObj.SectionNameMap[name]
+	if !exist {
+		return 0, errors.New("section not found")
+	}
+	return elfObj.Shdrs[shIdx].Sh_addr, nil
+}
 func (elfObj *Elf64Object) GetSectionBinByName(name string) []byte {
 	shIdx, exist := elfObj.SectionNameMap[name]
 	if !exist {
