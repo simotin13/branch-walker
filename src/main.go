@@ -10,6 +10,51 @@ import (
 	"strings"
 )
 
+type RiscVImm struct {
+	Val  int64
+	UVal uint64
+}
+
+type RiscVReg struct {
+	Reg     uint
+	RegName string
+}
+type RiscVMem struct {
+	Reg     uint
+	RegName string
+}
+
+const (
+	CMP_EQ       = iota // ==
+	CMP_NOT_EQ          // !=
+	CMP_LT              // <
+	CMP_LT_OR_EQ        // <=
+	CMP_GT              // >
+	CMP_GT_OR_EQ        // >=
+)
+
+type CmpConstraint struct {
+	CmpType int
+}
+
+type CompareInfo struct {
+	cmpInsn      capstone.Instruction
+	targetSlices []capstone.Instruction
+	constraint   CmpConstraint
+}
+
+type BasicBlock struct {
+	entryAddr  uint64
+	branchInsn capstone.Instruction
+	nextBlocks []*BasicBlock
+}
+
+const (
+	SLICING_STATUS_NONE = iota
+	SLICING_STATUS_WAIT_CMP
+	SLICING_STATUS_SLICING
+)
+
 func reverse(data []byte) []byte {
 	reversed := make([]byte, len(data))
 	copy(reversed, data)
@@ -106,7 +151,10 @@ func main() {
 				logger.ShowErrorMsg("Failed to disassemble\n")
 				os.Exit(-1)
 			}
-			rev_insns := capstone.ReverseInsns(insns);
+
+			basicBlock := new(BasicBlock)
+			slicingStatus := SLICING_STATUS_NONE
+			rev_insns := capstone.ReverseInsns(insns)
 			for _, insn := range rev_insns {
 				le_bytes := reverse(insn.Bytes)
 				logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
@@ -123,8 +171,16 @@ func main() {
 						logger.ShowAppMsg("        Operand:%d, Type:%s, Base:%s, Disp:%d\n", i, type_name, reg_name, op.Mem.Disp)
 					}
 				}
-				if isBranchInsn(insn) {
-					logger.ShowAppMsg("banch found!!!\n")
+				switch slicingStatus {
+				case SLICING_STATUS_NONE:
+					if isBranchInsn(insn) {
+						logger.DLog("Branch: %s\n", insn.Mnemonic)
+						basicBlock.branchInsn = insn
+						slicingStatus = SLICING_STATUS_SLICING
+					}
+				case SLICING_STATUS_WAIT_CMP:
+				case SLICING_STATUS_SLICING:
+					// cmp 命令に使われているオペランドと同じメモリ、レジスタが更新されている命令をスライス
 				}
 			}
 		}
