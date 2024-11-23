@@ -51,9 +51,21 @@ type BasicBlock struct {
 
 const (
 	SLICING_STATUS_NONE = iota
-	SLICING_STATUS_WAIT_CMP
 	SLICING_STATUS_SLICING
 )
+
+var branchInsnMap = map[string]struct{}{
+	"BNE": {},
+}
+
+var modifyInsnMap = map[string]struct{}{
+	"ADDI": {}, // add immediate
+	"SB":   {}, // store word
+	"SH":   {}, // store half word
+	"SW":   {}, // store word
+	"LI":   {}, // load immediate
+	"LUI":  {}, // load upper immediate
+}
 
 func reverse(data []byte) []byte {
 	reversed := make([]byte, len(data))
@@ -63,6 +75,7 @@ func reverse(data []byte) []byte {
 	}
 	return reversed
 }
+
 func main() {
 	logger.Setup("branch-walker", logger.TRACE, false)
 	if len(os.Args) < 2 {
@@ -178,9 +191,11 @@ func main() {
 						basicBlock.branchInsn = insn
 						slicingStatus = SLICING_STATUS_SLICING
 					}
-				case SLICING_STATUS_WAIT_CMP:
 				case SLICING_STATUS_SLICING:
 					// cmp 命令に使われているオペランドと同じメモリ、レジスタが更新されている命令をスライス
+					if is_modify_insn(insn) {
+
+					}
 				}
 			}
 		}
@@ -189,9 +204,12 @@ func main() {
 
 func isBranchInsn(insn capstone.Instruction) bool {
 	nm := strings.ToUpper(insn.Mnemonic)
-	if nm == "BNE" {
-		return true
-	}
+	_, found := branchInsnMap[nm]
+	return found
+}
 
-	return false
+func is_modify_insn(insn capstone.Instruction) bool {
+	nm := strings.ToUpper(insn.Mnemonic)
+	_, found := modifyInsnMap[nm]
+	return found
 }
