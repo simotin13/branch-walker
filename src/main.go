@@ -16,12 +16,13 @@ type RiscVImm struct {
 }
 
 type RiscVReg struct {
-	Reg     uint
+	RegNum  uint
 	RegName string
 }
 type RiscVMem struct {
-	Reg     uint
-	RegName string
+	BaseReg     uint
+	BaseRegName string
+	Offset      int64
 }
 
 const (
@@ -37,10 +38,16 @@ type CmpConstraint struct {
 	CmpType int
 }
 
-type CompareInfo struct {
-	cmpInsn      capstone.Instruction
-	targetSlices []capstone.Instruction
-	constraint   CmpConstraint
+type RiscVOperandInfo struct {
+	Type uint
+	Reg  RiscVReg
+	Mem  RiscVMem
+}
+
+type SliceInfo struct {
+	CmpInsn  capstone.Instruction
+	Operands []RiscVOperandInfo
+	Slices   []capstone.Instruction
 }
 
 type BasicBlock struct {
@@ -165,7 +172,8 @@ func main() {
 				os.Exit(-1)
 			}
 
-			basicBlock := new(BasicBlock)
+			sliceInfo := SliceInfo{}
+			basicBlock := BasicBlock{}
 			slicingStatus := SLICING_STATUS_NONE
 			rev_insns := capstone.ReverseInsns(insns)
 			for _, insn := range rev_insns {
@@ -186,30 +194,72 @@ func main() {
 				}
 				switch slicingStatus {
 				case SLICING_STATUS_NONE:
-					if isBranchInsn(insn) {
+					if isBranchInsn(&insn) {
 						logger.DLog("Branch: %s\n", insn.Mnemonic)
 						basicBlock.branchInsn = insn
 						slicingStatus = SLICING_STATUS_SLICING
+						sliceInfo.CmpInsn = insn
+						for _, op := range insn.Riscv.Operands {
+							switch op.Type {
+							case capstone.RISCV_OP_REG:
+								regName := capstone.GetRiscVRegName(op.Reg)
+								regInfo := RiscVReg{RegNum: op.Reg, RegName: regName}
+								operandInfo := RiscVOperandInfo{Type: op.Type, Reg: regInfo}
+								sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
+							case capstone.RISCV_OP_IMM:
+								continue
+							case capstone.RISCV_OP_MEM:
+								regName := capstone.GetRiscVRegName(op.Reg)
+								memInfo := RiscVMem{BaseReg: op.Reg, BaseRegName: regName, Offset: op.Mem.Disp}
+								operandInfo := RiscVOperandInfo{Type: op.Type, Mem: memInfo}
+								sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
+								continue
+							}
+						}
 					}
 				case SLICING_STATUS_SLICING:
 					// cmp 命令に使われているオペランドと同じメモリ、レジスタが更新されている命令をスライス
-					if is_modify_insn(insn) {
-
-					}
+					check_slice(&insn, &sliceInfo)
 				}
 			}
 		}
 	}
 }
 
-func isBranchInsn(insn capstone.Instruction) bool {
+func isBranchInsn(insn *capstone.Instruction) bool {
 	nm := strings.ToUpper(insn.Mnemonic)
 	_, found := branchInsnMap[nm]
 	return found
 }
 
-func is_modify_insn(insn capstone.Instruction) bool {
+func is_modify_insn(insn *capstone.Instruction) bool {
 	nm := strings.ToUpper(insn.Mnemonic)
 	_, found := modifyInsnMap[nm]
 	return found
+}
+func check_slice(insn *capstone.Instruction, sliceInfo *SliceInfo) {
+	nm := strings.ToUpper(insn.Mnemonic)
+	for _, op := range sliceInfo.Operands {
+		if op.Type == capstone.RISCV_OP_REG {
+			switch nm {
+			case "ADDI": // add immediate
+				op0 := insn.Riscv.Operands[0]
+				if op0.Reg == op.Reg.RegNum {
+					sliceInfo.Slices = append(sliceInfo.Slices, *insn)
+				}
+				break
+			case "SB": // store word
+				break
+			case "SH": // store half word
+				break
+			case "SW": // store word
+				break
+			case "LI": // load immediate
+				break
+			case "LUI": // load upper immediate
+				break
+			}
+		}
+
+	}
 }
