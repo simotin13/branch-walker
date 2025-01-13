@@ -52,8 +52,10 @@ type SliceInfo struct {
 
 type BasicBlock struct {
 	entryAddr  uint64
-	branchInsn capstone.Instruction
-	nextBlocks []*BasicBlock
+	from       []BasicBlock
+	nextBlocks []BasicBlock
+	branchInsn *capstone.Instruction
+	insns      []capstone.Instruction
 }
 
 const (
@@ -175,6 +177,26 @@ func main() {
 			sliceInfo := SliceInfo{}
 			basicBlock := BasicBlock{}
 			slicingStatus := SLICING_STATUS_NONE
+
+			var basicBlks []BasicBlock
+			var curBasickBlk *BasicBlock
+			for _, insn := range insns {
+				if curBasickBlk == nil {
+					curBasickBlk = &BasicBlock{
+						entryAddr:  uint64(insn.Address),
+						from:       []BasicBlock{},
+						nextBlocks: []BasicBlock{},
+						branchInsn: nil,
+						insns:      []capstone.Instruction{},
+					}
+				}
+				curBasickBlk.insns = append(curBasickBlk.insns, insn)
+				if isBranchInsn(&insn) {
+					curBasickBlk.branchInsn = &insn
+					basicBlks = append(basicBlks, *curBasickBlk)
+				}
+			}
+
 			rev_insns := capstone.ReverseInsns(insns)
 			for _, insn := range rev_insns {
 				le_bytes := reverse(insn.Bytes)
@@ -196,7 +218,7 @@ func main() {
 				case SLICING_STATUS_NONE:
 					if isBranchInsn(&insn) {
 						logger.DLog("Branch: %s\n", insn.Mnemonic)
-						basicBlock.branchInsn = insn
+						basicBlock.branchInsn = &insn
 						slicingStatus = SLICING_STATUS_SLICING
 						sliceInfo.CmpInsn = insn
 						for _, op := range insn.Riscv.Operands {
