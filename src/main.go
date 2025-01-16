@@ -52,8 +52,8 @@ type SliceInfo struct {
 
 type BasicBlock struct {
 	entryAddr  uint64
-	from       []BasicBlock
-	nextBlocks []BasicBlock
+	from       []uint64
+	nextBlocks []uint64
 	branchInsn *capstone.Instruction
 	insns      []capstone.Instruction
 }
@@ -178,22 +178,27 @@ func main() {
 			basicBlock := BasicBlock{}
 			slicingStatus := SLICING_STATUS_NONE
 
-			var basicBlks []BasicBlock
+			basicBlks := make(map[uint64]BasicBlock)
 			var curBasickBlk *BasicBlock
 			for _, insn := range insns {
+				le_bytes := reverse(insn.Bytes)
+				logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 				if curBasickBlk == nil {
 					curBasickBlk = &BasicBlock{
 						entryAddr:  uint64(insn.Address),
-						from:       []BasicBlock{},
-						nextBlocks: []BasicBlock{},
+						from:       []uint64{},
+						nextBlocks: []uint64{},
 						branchInsn: nil,
 						insns:      []capstone.Instruction{},
 					}
 				}
 				curBasickBlk.insns = append(curBasickBlk.insns, insn)
 				if isBranchInsn(&insn) {
+					logger.ShowAppMsg("**** Branch insn found!\n")
 					curBasickBlk.branchInsn = &insn
-					basicBlks = append(basicBlks, *curBasickBlk)
+					jmpAddrs := getJmpAddrs(&insn)
+					curBasickBlk.nextBlocks = append(curBasickBlk.nextBlocks, jmpAddrs...)
+					basicBlks[curBasickBlk.entryAddr] = *curBasickBlk
 				}
 			}
 
@@ -252,6 +257,19 @@ func isBranchInsn(insn *capstone.Instruction) bool {
 	nm := strings.ToUpper(insn.Mnemonic)
 	_, found := branchInsnMap[nm]
 	return found
+}
+func getJmpAddrs(insn *capstone.Instruction) []uint64 {
+	var jmpAddrs []uint64
+	nm := strings.ToUpper(insn.Mnemonic)
+	switch nm {
+	case "BNE":
+		op := insn.Riscv.Operands[2]
+		type_name := capstone.GetRiscVOperandTypeName(op.Type)
+		var jmpAddr uint64 = uint64(insn.Address) + uint64(op.Imm)
+		logger.ShowAppMsg("BNE Type:%s, Imm:0x%02X, jmpAddr:%X\n", type_name, op.Imm, jmpAddr)
+		jmpAddrs = append(jmpAddrs, jmpAddr)
+	}
+	return jmpAddrs
 }
 
 func is_modify_insn(insn *capstone.Instruction) bool {
