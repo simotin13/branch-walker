@@ -58,13 +58,18 @@ type BasicBlock struct {
 	insns      []capstone.Instruction
 }
 
+type BranchInsnInfo struct {
+	IsBranch            bool
+	isConditionalBranch bool
+}
+
 const (
 	SLICING_STATUS_NONE = iota
 	SLICING_STATUS_SLICING
 )
 
-var branchInsnMap = map[string]struct{}{
-	"BNE": {},
+var branchInsnMap = map[string]BranchInsnInfo{
+	"BNE": {IsBranch: true, isConditionalBranch: true},
 }
 
 var modifyInsnMap = map[string]struct{}{
@@ -193,7 +198,8 @@ func main() {
 					}
 				}
 				curBasickBlk.insns = append(curBasickBlk.insns, insn)
-				if isBranchInsn(&insn) {
+				isBransh, _ := isBranchInsn(&insn)
+				if isBransh {
 					logger.ShowAppMsg("**** Branch insn found!\n")
 					curBasickBlk.branchInsn = &insn
 					jmpAddrs := getJmpAddrs(&insn)
@@ -221,7 +227,8 @@ func main() {
 				}
 				switch slicingStatus {
 				case SLICING_STATUS_NONE:
-					if isBranchInsn(&insn) {
+					isBranch, _ := isBranchInsn(&insn)
+					if isBranch {
 						logger.DLog("Branch: %s\n", insn.Mnemonic)
 						basicBlock.branchInsn = &insn
 						slicingStatus = SLICING_STATUS_SLICING
@@ -253,10 +260,17 @@ func main() {
 	}
 }
 
-func isBranchInsn(insn *capstone.Instruction) bool {
+func isBranchInsn(insn *capstone.Instruction) (isBranch bool, isConditionalBranch bool) {
+	isBranch = false
+	isConditionalBranch = false
 	nm := strings.ToUpper(insn.Mnemonic)
-	_, found := branchInsnMap[nm]
-	return found
+	branchInfo, exist := branchInsnMap[nm]
+	if exist {
+		isBranch = branchInfo.IsBranch
+		isConditionalBranch = branchInfo.IsBranch
+	}
+
+	return isBranch, isConditionalBranch
 }
 func getJmpAddrs(insn *capstone.Instruction) []uint64 {
 	var jmpAddrs []uint64
