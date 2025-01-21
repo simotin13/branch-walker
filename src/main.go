@@ -179,10 +179,6 @@ func main() {
 				os.Exit(-1)
 			}
 
-			sliceInfo := SliceInfo{}
-			basicBlock := BasicBlock{}
-			slicingStatus := SLICING_STATUS_NONE
-
 			basicBlks := make(map[uint64]BasicBlock)
 			var curBasickBlk *BasicBlock
 			for _, insn := range insns {
@@ -205,57 +201,77 @@ func main() {
 					jmpAddrs := getJmpAddrs(&insn)
 					curBasickBlk.nextBlocks = append(curBasickBlk.nextBlocks, jmpAddrs...)
 					basicBlks[curBasickBlk.entryAddr] = *curBasickBlk
+					curBasickBlk = nil
+				}
+			}
+			if curBasickBlk != nil {
+				basicBlks[curBasickBlk.entryAddr] = *curBasickBlk
+				curBasickBlk = nil
+			}
+			logger.ShowAppMsg("**** basic blocks count:[%d] ****\n", len(basicBlks))
+			for entryAddr, basicBlk := range basicBlks {
+				logger.ShowAppMsg("**** entryAddr: 0x%X\n", entryAddr)
+				for _, insn := range basicBlk.insns {
+					//le_bytes := reverse(insn.Bytes)
+					//logger.ShowAppMsg("0x%x:\t%XMnemonic\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+					logger.ShowAppMsg("0x%x:\t %s\n", insn.Address, insn.Mnemonic)
 				}
 			}
 
-			rev_insns := capstone.ReverseInsns(insns)
-			for _, insn := range rev_insns {
-				le_bytes := reverse(insn.Bytes)
-				logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
-				for i, op := range insn.Riscv.Operands {
-					type_name := capstone.GetRiscVOperandTypeName(op.Type)
-					switch op.Type {
-					case capstone.RISCV_OP_REG:
-						reg_name := capstone.GetRiscVRegName(op.Reg)
-						logger.ShowAppMsg("        Operand:%d, Type:%s, Reg:%s\n", i, type_name, reg_name)
-					case capstone.RISCV_OP_IMM:
-						logger.ShowAppMsg("        Operand:%d, Type:%s, Imm:%d\n", i, type_name, op.Imm)
-					case capstone.RISCV_OP_MEM:
-						reg_name := capstone.GetRiscVRegName(op.Mem.Base)
-						logger.ShowAppMsg("        Operand:%d, Type:%s, Base:%s, Disp:%d\n", i, type_name, reg_name, op.Mem.Disp)
-					}
-				}
-				switch slicingStatus {
-				case SLICING_STATUS_NONE:
-					isBranch, _ := isBranchInsn(&insn)
-					if isBranch {
-						logger.DLog("Branch: %s\n", insn.Mnemonic)
-						basicBlock.branchInsn = &insn
-						slicingStatus = SLICING_STATUS_SLICING
-						sliceInfo.CmpInsn = insn
-						for _, op := range insn.Riscv.Operands {
-							switch op.Type {
-							case capstone.RISCV_OP_REG:
-								regName := capstone.GetRiscVRegName(op.Reg)
-								regInfo := RiscVReg{RegNum: op.Reg, RegName: regName}
-								operandInfo := RiscVOperandInfo{Type: op.Type, Reg: regInfo}
-								sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
-							case capstone.RISCV_OP_IMM:
-								continue
-							case capstone.RISCV_OP_MEM:
-								regName := capstone.GetRiscVRegName(op.Reg)
-								memInfo := RiscVMem{BaseReg: op.Reg, BaseRegName: regName, Offset: op.Mem.Disp}
-								operandInfo := RiscVOperandInfo{Type: op.Type, Mem: memInfo}
-								sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
-								continue
+			/*
+				sliceInfo := SliceInfo{}
+				basicBlock := BasicBlock{}
+				slicingStatus := SLICING_STATUS_NONE
+
+				rev_insns := capstone.ReverseInsns(insns)
+						for _, insn := range rev_insns {
+							le_bytes := reverse(insn.Bytes)
+							logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+							for i, op := range insn.Riscv.Operands {
+								type_name := capstone.GetRiscVOperandTypeName(op.Type)
+								switch op.Type {
+								case capstone.RISCV_OP_REG:
+									reg_name := capstone.GetRiscVRegName(op.Reg)
+									logger.ShowAppMsg("        Operand:%d, Type:%s, Reg:%s\n", i, type_name, reg_name)
+								case capstone.RISCV_OP_IMM:
+									logger.ShowAppMsg("        Operand:%d, Type:%s, Imm:%d\n", i, type_name, op.Imm)
+								case capstone.RISCV_OP_MEM:
+									reg_name := capstone.GetRiscVRegName(op.Mem.Base)
+									logger.ShowAppMsg("        Operand:%d, Type:%s, Base:%s, Disp:%d\n", i, type_name, reg_name, op.Mem.Disp)
+								}
+							}
+							switch slicingStatus {
+							case SLICING_STATUS_NONE:
+								isBranch, _ := isBranchInsn(&insn)
+								if isBranch {
+									logger.DLog("Branch: %s\n", insn.Mnemonic)
+									basicBlock.branchInsn = &insn
+									slicingStatus = SLICING_STATUS_SLICING
+									sliceInfo.CmpInsn = insn
+									for _, op := range insn.Riscv.Operands {
+										switch op.Type {
+										case capstone.RISCV_OP_REG:
+											regName := capstone.GetRiscVRegName(op.Reg)
+											regInfo := RiscVReg{RegNum: op.Reg, RegName: regName}
+											operandInfo := RiscVOperandInfo{Type: op.Type, Reg: regInfo}
+											sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
+										case capstone.RISCV_OP_IMM:
+											continue
+										case capstone.RISCV_OP_MEM:
+											regName := capstone.GetRiscVRegName(op.Reg)
+											memInfo := RiscVMem{BaseReg: op.Reg, BaseRegName: regName, Offset: op.Mem.Disp}
+											operandInfo := RiscVOperandInfo{Type: op.Type, Mem: memInfo}
+											sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
+											continue
+										}
+									}
+								}
+							case SLICING_STATUS_SLICING:
+								// cmp 命令に使われているオペランドと同じメモリ、レジスタが更新されている命令をスライス
+								check_slice(&insn, &sliceInfo)
 							}
 						}
-					}
-				case SLICING_STATUS_SLICING:
-					// cmp 命令に使われているオペランドと同じメモリ、レジスタが更新されている命令をスライス
-					check_slice(&insn, &sliceInfo)
-				}
-			}
+			*/
 		}
 	}
 }
@@ -272,15 +288,20 @@ func isBranchInsn(insn *capstone.Instruction) (isBranch bool, isConditionalBranc
 
 	return isBranch, isConditionalBranch
 }
+
 func getJmpAddrs(insn *capstone.Instruction) []uint64 {
 	var jmpAddrs []uint64
 	nm := strings.ToUpper(insn.Mnemonic)
+	jmpAddr := uint64(insn.Address) + uint64(len(insn.Bytes))
+	jmpAddrs = append(jmpAddrs, jmpAddr)
+	logger.DLog("*** Next insn addr:0x%X\n", jmpAddr)
+
 	switch nm {
 	case "BNE":
 		op := insn.Riscv.Operands[2]
 		type_name := capstone.GetRiscVOperandTypeName(op.Type)
-		var jmpAddr uint64 = uint64(insn.Address) + uint64(op.Imm)
-		logger.ShowAppMsg("BNE Type:%s, Imm:0x%02X, jmpAddr:%X\n", type_name, op.Imm, jmpAddr)
+		jmpAddr = uint64(insn.Address) + uint64(op.Imm)
+		logger.DLog("BNE Type:%s, Imm:0x%02X, jmpAddr:%X\n", type_name, op.Imm, jmpAddr)
 		jmpAddrs = append(jmpAddrs, jmpAddr)
 	}
 	return jmpAddrs
