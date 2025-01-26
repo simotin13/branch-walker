@@ -10,21 +10,6 @@ import (
 	"strings"
 )
 
-type RiscVImm struct {
-	Val  int64
-	UVal uint64
-}
-
-type RiscVReg struct {
-	RegNum  uint
-	RegName string
-}
-type RiscVMem struct {
-	BaseReg     uint
-	BaseRegName string
-	Offset      int64
-}
-
 const (
 	CMP_EQ       = iota // ==
 	CMP_NOT_EQ          // !=
@@ -33,21 +18,42 @@ const (
 	CMP_GT              // >
 	CMP_GT_OR_EQ        // >=
 )
+const (
+	OPERAND_TYPE_REG = iota
+	OPERAND_TYPE_MEM
+)
+const (
+	CMP_COND_TYPE_ARGS = iota
+	CMP_COND_TYPE_FUNC
+	CMP_COND_TYPE_IMM
+)
 
-type CmpConstraint struct {
-	CmpType int
-}
-
-type RiscVOperandInfo struct {
-	Type uint
+type RiscVOperand struct {
+	Type int
 	Reg  RiscVReg
 	Mem  RiscVMem
+	Imm  RiscVImm
 }
 
-type SliceInfo struct {
-	CmpInsn  capstone.Instruction
-	Operands []RiscVOperandInfo
-	Slices   []capstone.Instruction
+type RiscVImm struct {
+	Val  int64
+	UVal uint64
+}
+
+type RiscVReg struct {
+	RegNum   uint
+	RegName  string
+	Value    int64
+	HasValue bool
+}
+
+type RiscVMem struct {
+	Reg    RiscVReg
+	Offset int64
+}
+
+type CmpCondition struct {
+	CmpType int
 }
 
 type BasicBlock struct {
@@ -63,22 +69,11 @@ type BranchInsnInfo struct {
 	isConditionalBranch bool
 }
 
-const (
-	SLICING_STATUS_NONE = iota
-	SLICING_STATUS_SLICING
-)
-
 var branchInsnMap = map[string]BranchInsnInfo{
 	"BNE": {IsBranch: true, isConditionalBranch: true},
 }
-
-var modifyInsnMap = map[string]struct{}{
-	"ADDI": {}, // add immediate
-	"SB":   {}, // store word
-	"SH":   {}, // store half word
-	"SW":   {}, // store word
-	"LI":   {}, // load immediate
-	"LUI":  {}, // load upper immediate
+var loadImmInsnMap = map[string]struct{}{
+	"C.LI": {},
 }
 
 func reverse(data []byte) []byte {
@@ -196,7 +191,6 @@ func main() {
 				curBasickBlk.insns = append(curBasickBlk.insns, insn)
 				isBransh, _ := isBranchInsn(&insn)
 				if isBransh {
-					logger.ShowAppMsg("**** Branch insn found!\n")
 					curBasickBlk.branchInsn = &insn
 					jmpAddrs := getJmpAddrs(&insn)
 					curBasickBlk.nextBlocks = append(curBasickBlk.nextBlocks, jmpAddrs...)
@@ -208,70 +202,51 @@ func main() {
 				basicBlks[curBasickBlk.entryAddr] = *curBasickBlk
 				curBasickBlk = nil
 			}
+
 			logger.ShowAppMsg("**** basic blocks count:[%d] ****\n", len(basicBlks))
-			for entryAddr, basicBlk := range basicBlks {
+			relatedOperands := make([]RiscVOperand, 0)
+			for entryAddr, _ := range basicBlks {
 				logger.ShowAppMsg("**** entryAddr: 0x%X\n", entryAddr)
-				for _, insn := range basicBlk.insns {
-					//le_bytes := reverse(insn.Bytes)
-					//logger.ShowAppMsg("0x%x:\t%XMnemonic\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+				revInsns := capstone.ReverseInsns(insns)
+				for _, insn := range revInsns {
 					logger.ShowAppMsg("0x%x:\t %s\n", insn.Address, insn.Mnemonic)
-				}
-			}
+					isBransh, _ := isBranchInsn(&insn)
+					if isBransh {
+						operand := insn.Riscv.Operands[0]
+						reg0Num := operand.Reg
+						reg0Name := capstone.GetRiscVRegName(operand.Reg)
+						reg0 := RiscVReg{RegNum: operand.Reg, RegName: reg0Name, Value: 0, HasValue: false}
 
-			/*
-				sliceInfo := SliceInfo{}
-				basicBlock := BasicBlock{}
-				slicingStatus := SLICING_STATUS_NONE
+						operand = insn.Riscv.Operands[1]
+						reg1Num := operand.Reg
+						reg1Name := capstone.GetRiscVRegName(operand.Reg)
+						reg1 := RiscVReg{RegNum: operand.Reg, RegName: reg0Name, Value: 0, HasValue: false}
+						logger.ShowAppMsg("reg0:%s[%d], reg1:%s[%d]\n", reg0Name, reg0Num, reg1Name, reg1Num)
 
-				rev_insns := capstone.ReverseInsns(insns)
-						for _, insn := range rev_insns {
-							le_bytes := reverse(insn.Bytes)
-							logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
-							for i, op := range insn.Riscv.Operands {
-								type_name := capstone.GetRiscVOperandTypeName(op.Type)
-								switch op.Type {
-								case capstone.RISCV_OP_REG:
-									reg_name := capstone.GetRiscVRegName(op.Reg)
-									logger.ShowAppMsg("        Operand:%d, Type:%s, Reg:%s\n", i, type_name, reg_name)
-								case capstone.RISCV_OP_IMM:
-									logger.ShowAppMsg("        Operand:%d, Type:%s, Imm:%d\n", i, type_name, op.Imm)
-								case capstone.RISCV_OP_MEM:
-									reg_name := capstone.GetRiscVRegName(op.Mem.Base)
-									logger.ShowAppMsg("        Operand:%d, Type:%s, Base:%s, Disp:%d\n", i, type_name, reg_name, op.Mem.Disp)
-								}
+						relatedOperands = append(relatedOperands, RiscVOperand{Type: OPERAND_TYPE_REG, Reg: reg0})
+						relatedOperands = append(relatedOperands, RiscVOperand{Type: OPERAND_TYPE_REG, Reg: reg1})
+						continue
+					}
+					isLoadImm := isLoadImmInsn(&insn)
+					if isLoadImm {
+						reg := insn.Riscv.Operands[0]
+						imm := insn.Riscv.Operands[1]
+						//reg.Reg
+						for i, relatedOperand := range relatedOperands {
+							if relatedOperand.Type != OPERAND_TYPE_REG {
+								continue
 							}
-							switch slicingStatus {
-							case SLICING_STATUS_NONE:
-								isBranch, _ := isBranchInsn(&insn)
-								if isBranch {
-									logger.DLog("Branch: %s\n", insn.Mnemonic)
-									basicBlock.branchInsn = &insn
-									slicingStatus = SLICING_STATUS_SLICING
-									sliceInfo.CmpInsn = insn
-									for _, op := range insn.Riscv.Operands {
-										switch op.Type {
-										case capstone.RISCV_OP_REG:
-											regName := capstone.GetRiscVRegName(op.Reg)
-											regInfo := RiscVReg{RegNum: op.Reg, RegName: regName}
-											operandInfo := RiscVOperandInfo{Type: op.Type, Reg: regInfo}
-											sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
-										case capstone.RISCV_OP_IMM:
-											continue
-										case capstone.RISCV_OP_MEM:
-											regName := capstone.GetRiscVRegName(op.Reg)
-											memInfo := RiscVMem{BaseReg: op.Reg, BaseRegName: regName, Offset: op.Mem.Disp}
-											operandInfo := RiscVOperandInfo{Type: op.Type, Mem: memInfo}
-											sliceInfo.Operands = append(sliceInfo.Operands, operandInfo)
-											continue
-										}
-									}
-								}
-							case SLICING_STATUS_SLICING:
-								// cmp 命令に使われているオペランドと同じメモリ、レジスタが更新されている命令をスライス
-								check_slice(&insn, &sliceInfo)
+							if relatedOperand.Reg.RegNum == reg.Reg {
+								relatedOperands[i].Reg.HasValue = true
+								relatedOperands[i].Reg.Value = imm.Imm
+								logger.ShowAppMsg("related reg found: [%s][%d], Value:[%d]\n", relatedOperand.Reg.RegName, relatedOperand.Reg.RegNum, imm.Imm)
+								break
 							}
 						}
-			*/
+
+					}
+				}
+			}
 		}
 	}
 }
@@ -289,6 +264,12 @@ func isBranchInsn(insn *capstone.Instruction) (isBranch bool, isConditionalBranc
 	return isBranch, isConditionalBranch
 }
 
+func isLoadImmInsn(insn *capstone.Instruction) (isLoadImm bool) {
+	nm := strings.ToUpper(insn.Mnemonic)
+	_, isLoadImm = loadImmInsnMap[nm]
+	return isLoadImm
+}
+
 func getJmpAddrs(insn *capstone.Instruction) []uint64 {
 	var jmpAddrs []uint64
 	nm := strings.ToUpper(insn.Mnemonic)
@@ -299,42 +280,10 @@ func getJmpAddrs(insn *capstone.Instruction) []uint64 {
 	switch nm {
 	case "BNE":
 		op := insn.Riscv.Operands[2]
-		type_name := capstone.GetRiscVOperandTypeName(op.Type)
+		//type_name := capstone.GetRiscVOperandTypeName(op.Type)
 		jmpAddr = uint64(insn.Address) + uint64(op.Imm)
-		logger.DLog("BNE Type:%s, Imm:0x%02X, jmpAddr:%X\n", type_name, op.Imm, jmpAddr)
+		//logger.DLog("BNE Type:%s, Imm:0x%02X, jmpAddr:%X\n", type_name, op.Imm, jmpAddr)
 		jmpAddrs = append(jmpAddrs, jmpAddr)
 	}
 	return jmpAddrs
-}
-
-func is_modify_insn(insn *capstone.Instruction) bool {
-	nm := strings.ToUpper(insn.Mnemonic)
-	_, found := modifyInsnMap[nm]
-	return found
-}
-func check_slice(insn *capstone.Instruction, sliceInfo *SliceInfo) {
-	nm := strings.ToUpper(insn.Mnemonic)
-	for _, op := range sliceInfo.Operands {
-		if op.Type == capstone.RISCV_OP_REG {
-			switch nm {
-			case "ADDI": // add immediate
-				op0 := insn.Riscv.Operands[0]
-				if op0.Reg == op.Reg.RegNum {
-					sliceInfo.Slices = append(sliceInfo.Slices, *insn)
-				}
-				break
-			case "SB": // store word
-				break
-			case "SH": // store half word
-				break
-			case "SW": // store word
-				break
-			case "LI": // load immediate
-				break
-			case "LUI": // load upper immediate
-				break
-			}
-		}
-
-	}
 }
