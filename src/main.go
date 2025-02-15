@@ -181,16 +181,22 @@ func main() {
 
 	funcSliceMap := make(map[uint64]SliceInfo)
 	funcInfos := targetObj.GetFuncsInfos()
-	for _, elfFuncInfo := range funcInfos {
-		load_addr, err := targetObj.GetSectionLoadAddrByName(elfFuncInfo.SecName)
+	var elfMainFuncInfo  *elf.ElfFunctionInfo
+	for i, elfFuncInfo := range funcInfos {
+		if elfFuncInfo.Name == "main" {
+			logger.DLog("main function found\n")
+			elfMainFuncInfo = &funcInfos[i]
+			continue
+		}
+		loadAddr, err := targetObj.GetSectionLoadAddrByName(elfFuncInfo.SecName)
 		if err != nil {
 			logger.ShowErrorMsg("Failed to disassemble\n")
 			os.Exit(-1)
 		}
 
-		fStart := elfFuncInfo.Addr - load_addr
+		fStart := elfFuncInfo.Addr - loadAddr
 		fEnd := fStart + elfFuncInfo.Size
-		logger.DLog("Disassemble Name:%s, Addr:0x%X, Offset:0x%X, Size:%d, SecName:%s, LoadAddr:0x%X\n", elfFuncInfo.Name, elfFuncInfo.Addr, fStart, elfFuncInfo.Size, elfFuncInfo.SecName, load_addr)
+		logger.DLog("Disassemble Name:%s, Addr:0x%X, Offset:0x%X, Size:%d, SecName:%s, LoadAddr:0x%X\n", elfFuncInfo.Name, elfFuncInfo.Addr, fStart, elfFuncInfo.Size, elfFuncInfo.SecName, loadAddr)
 		secBin := targetObj.GetSectionBinByName(elfFuncInfo.SecName)
 		if secBin == nil {
 			logger.ShowErrorMsg("Cannot find .text section\n")
@@ -200,161 +206,192 @@ func main() {
 			logger.DLog("func '%s' size is 0\n", elfFuncInfo.Name)
 			continue
 		}
-		f_bin := secBin[fStart:fEnd]
-		insns, err := cs.Disasm(f_bin, elfFuncInfo.Addr, 0)
+		fBin := secBin[fStart:fEnd]
+		insns, err := cs.Disasm(fBin, elfFuncInfo.Addr, 0)
+		if err != nil {
+			logger.ShowErrorMsg("Failed to disassemble\n")
+			os.Exit(-1)
+		}
+		funcSlice := backwardSlice(insns)
+		funcSliceMap[elfFuncInfo.Addr] = funcSlice
+	}
+
+	if elfMainFuncInfo != nil {
+		loadAddr, err := targetObj.GetSectionLoadAddrByName(elfMainFuncInfo.SecName)
 		if err != nil {
 			logger.ShowErrorMsg("Failed to disassemble\n")
 			os.Exit(-1)
 		}
 
-		basicBlks := make(map[uint64]BasicBlock)
-		var curBasickBlk *BasicBlock
-		for _, insn := range insns {
-			le_bytes := reverse(insn.Bytes)
-			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
-			if curBasickBlk == nil {
-				curBasickBlk = &BasicBlock{
-					EntryAddr:  uint64(insn.Address),
-					From:       []uint64{},
-					NextBlocks: []uint64{},
-					BranchInsn: nil,
-					Insns:      []capstone.Instruction{},
-				}
+		fStart := elfMainFuncInfo.Addr - loadAddr
+		fEnd := fStart + elfMainFuncInfo.Size
+		logger.DLog("Disassemble Name:%s, Addr:0x%X, Offset:0x%X, Size:%d, SecName:%s, LoadAddr:0x%X\n", elfMainFuncInfo.Name, elfMainFuncInfo.Addr, fStart, elfMainFuncInfo.Size, elfMainFuncInfo.SecName, loadAddr)
+		secBin := targetObj.GetSectionBinByName(elfMainFuncInfo.SecName)
+		if secBin == nil {
+			logger.ShowErrorMsg("Cannot find .text section\n")
+			os.Exit(-1)
+		}
+		if 0 < elfMainFuncInfo.Size {
+			fBin := secBin[fStart:fEnd]
+			insns, err := cs.Disasm(fBin, elfMainFuncInfo.Addr, 0)
+			if err != nil {
+				logger.ShowErrorMsg("Failed to disassemble\n")
+				os.Exit(-1)
 			}
-			curBasickBlk.Insns = append(curBasickBlk.Insns, insn)
-			isBransh, _ := isBranchInsn(&insn)
-			if isBransh {
-				curBasickBlk.BranchInsn = &insn
-				jmpAddrs := getJmpAddrs(&insn)
-				curBasickBlk.NextBlocks = append(curBasickBlk.NextBlocks, jmpAddrs...)
-				basicBlks[curBasickBlk.EntryAddr] = *curBasickBlk
-				curBasickBlk = nil
+
+			funcSlice := backwardSlice(insns)
+			funcSliceMap[elfMainFuncInfo.Addr] = funcSlice
+		}
+	}
+}
+
+func backwardSlice(insns []capstone.Instruction) SliceInfo {
+	basicBlks := make(map[uint64]BasicBlock)
+	var curBasickBlk *BasicBlock
+	for _, insn := range insns {
+		le_bytes := reverse(insn.Bytes)
+		logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+		if curBasickBlk == nil {
+			curBasickBlk = &BasicBlock{
+				EntryAddr:  uint64(insn.Address),
+				From:       []uint64{},
+				NextBlocks: []uint64{},
+				BranchInsn: nil,
+				Insns:      []capstone.Instruction{},
 			}
 		}
-		if curBasickBlk != nil {
+		curBasickBlk.Insns = append(curBasickBlk.Insns, insn)
+		isBransh, _ := isBranchInsn(&insn)
+		if isBransh {
+			curBasickBlk.BranchInsn = &insn
+			jmpAddrs := getJmpAddrs(&insn)
+			curBasickBlk.NextBlocks = append(curBasickBlk.NextBlocks, jmpAddrs...)
 			basicBlks[curBasickBlk.EntryAddr] = *curBasickBlk
 			curBasickBlk = nil
 		}
+	}
+	if curBasickBlk != nil {
+		basicBlks[curBasickBlk.EntryAddr] = *curBasickBlk
+		curBasickBlk = nil
+	}
 
-		for entryAddr, basicBlk := range basicBlks {
-			relatedOperands := make([]RiscVReg, 0)
-			logger.ShowAppMsg("**** entryAddr: 0x%X\n", entryAddr)
-			revInsns := capstone.ReverseInsns(insns)
-			for _, insn := range revInsns {
-				le_bytes := reverse(insn.Bytes)
-				logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+	for entryAddr, basicBlk := range basicBlks {
+		relatedOperands := make([]RiscVReg, 0)
+		//logger.ShowAppMsg("**** entryAddr: 0x%X\n", entryAddr)
+		revInsns := capstone.ReverseInsns(insns)
+		for _, insn := range revInsns {
+			//le_bytes := reverse(insn.Bytes)
+			//logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 
-				isBransh, _ := isBranchInsn(&insn)
-				if isBransh {
-					operand := insn.Riscv.Operands[0]
-					reg0Num := operand.Reg
-					reg0Name := capstone.GetRiscVRegName(operand.Reg)
+			isBransh, _ := isBranchInsn(&insn)
+			if isBransh {
+				operand := insn.Riscv.Operands[0]
+				reg0Num := operand.Reg
+				reg0Name := capstone.GetRiscVRegName(operand.Reg)
 
-					operand = insn.Riscv.Operands[1]
-					reg1Num := operand.Reg
-					reg1Name := capstone.GetRiscVRegName(operand.Reg)
-					logger.ShowAppMsg("reg0:%s[%d], reg1:%s[%d]\n", reg0Name, reg0Num, reg1Name, reg1Num)
-					relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg0Num, RegName: reg0Name, HasValue: false})
-					relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg1Num, RegName: reg1Name, HasValue: false})
-					continue
+				operand = insn.Riscv.Operands[1]
+				reg1Num := operand.Reg
+				reg1Name := capstone.GetRiscVRegName(operand.Reg)
+				//logger.ShowAppMsg("reg0:%s[%d], reg1:%s[%d]\n", reg0Name, reg0Num, reg1Name, reg1Num)
+				relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg0Num, RegName: reg0Name, HasValue: false})
+				relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg1Num, RegName: reg1Name, HasValue: false})
+				continue
+			}
+			isLoadImm := isLoadImmInsn(&insn)
+			if isLoadImm {
+				reg := insn.Riscv.Operands[0]
+				imm := insn.Riscv.Operands[1]
+				for i, relatedOperand := range relatedOperands {
+					if relatedOperand.RegNum == reg.Reg {
+						relatedOperands[i].HasValue = true
+						relatedOperands[i].LinkValueType = LinkValueTypeImm // capstone.RISCV_OP_IMM
+						relatedOperands[i].LinkValue = imm.Imm
+						//logger.ShowAppMsg("LoadImm Related reg found: [%s][%d], Value:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum, imm.Imm)
+						break
+					}
+					// update Link Value
+					if !relatedOperand.HasValue {
+						continue
+					}
+					if relatedOperand.LinkValueType != LinkValueTypeMem {
+						continue
+					}
+					if !relatedOperand.LinkMem.HasValue {
+						continue
+					}
+					if relatedOperand.LinkMem.ValueType != capstone.RISCV_OP_REG {
+						continue
+					}
+					// update LinkMem Value Reg → Imm
+					relatedOperands[i].LinkMem.ValueType = capstone.RISCV_OP_IMM
+					relatedOperands[i].LinkMem.Value = imm.Imm
+					regName := capstone.GetRiscVRegName(relatedOperands[i].LinkMem.RegNum)
+					offset := relatedOperands[i].LinkMem.Offset
+					value := relatedOperands[i].LinkMem.Value
+					logger.ShowAppMsg("Update LinkMem to Imm: [%s][%d], Value:[%d]\n", regName, offset, value)
 				}
-				isLoadImm := isLoadImmInsn(&insn)
-				if isLoadImm {
+				continue
+			}
+			isLoadMem := isLoadMemInsn(&insn)
+			if isLoadMem {
+				for i, relatedOperand := range relatedOperands {
+					//logger.ShowAppMsg("relatedOperand [%d],[%s]\n", i, relatedOperand.RegName)
 					reg := insn.Riscv.Operands[0]
-					imm := insn.Riscv.Operands[1]
-					for i, relatedOperand := range relatedOperands {
-						if relatedOperand.RegNum == reg.Reg {
-							relatedOperands[i].HasValue = true
-							relatedOperands[i].LinkValueType = LinkValueTypeImm // capstone.RISCV_OP_IMM
-							relatedOperands[i].LinkValue = imm.Imm
-							logger.ShowAppMsg("LoadImm Related reg found: [%s][%d], Value:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum, imm.Imm)
-							break
-						}
-						// update Link Value
-						if !relatedOperand.HasValue {
-							continue
-						}
-						if relatedOperand.LinkValueType != LinkValueTypeMem {
-							continue
-						}
-						if !relatedOperand.LinkMem.HasValue {
-							continue
-						}
-						if relatedOperand.LinkMem.ValueType != capstone.RISCV_OP_REG {
-							continue
-						}
-						// update LinkMem Value Reg → Imm
-						relatedOperands[i].LinkMem.ValueType = capstone.RISCV_OP_IMM
-						relatedOperands[i].LinkMem.Value = imm.Imm
-						regName := capstone.GetRiscVRegName(relatedOperands[i].LinkMem.RegNum)
-						offset := relatedOperands[i].LinkMem.Offset
-						value := relatedOperands[i].LinkMem.Value
-						logger.ShowAppMsg("Update LinkMem to Imm: [%s][%d], Value:[%d]\n", regName, offset, value)
-					}
-					continue
-				}
-				isLoadMem := isLoadMemInsn(&insn)
-				if isLoadMem {
-					for i, relatedOperand := range relatedOperands {
-						logger.ShowAppMsg("relatedOperand [%d],[%s]\n", i, relatedOperand.RegName)
-						reg := insn.Riscv.Operands[0]
-						mem := insn.Riscv.Operands[1]
-						if relatedOperand.RegNum == reg.Reg {
-							relatedOperands[i].HasValue = true
-							relatedOperands[i].LinkValueType = LinkValueTypeMem
-							relatedOperands[i].LinkMem = &RiscVMem{RegNum: mem.Mem.Base, Offset: mem.Mem.Disp, Value: 0, HasValue: false}
-							regName := capstone.GetRiscVRegName(relatedOperands[i].LinkMem.RegNum)
-							logger.ShowAppMsg("Load Related Reg found: [%s][%d], LinkMem:[%s][%d]\n", relatedOperand.RegName, relatedOperand.RegNum, regName, relatedOperands[i].LinkMem.RegNum)
-						}
-					}
-					continue
-				}
-				isStore := isStoreInsn(&insn)
-				if isStore {
-					for i, relatedOperand := range relatedOperands {
-						op0 := insn.Riscv.Operands[0]
-						op1 := insn.Riscv.Operands[1]
-						if !relatedOperand.HasValue {
-							continue
-						}
-						if relatedOperand.LinkValueType == LinkValueTypeMem {
-							// Update LinkMem to Reg
-							isSameBase := relatedOperand.LinkMem.RegNum == op1.Mem.Base
-							isSameOffset := uint(relatedOperand.LinkMem.Offset) == uint(op1.Mem.Disp)
-							if isSameBase && isSameOffset {
-								relatedOperands[i].LinkValueType = LinkValueTypeReg
-								relatedOperands[i].LinkMem = nil
-								regName := capstone.GetRiscVRegName(op0.Reg)
-								relatedOperands[i].LinkReg = &RiscVReg{RegNum: op0.Reg, RegName: regName, HasValue: false}
-							}
-						}
+					mem := insn.Riscv.Operands[1]
+					if relatedOperand.RegNum == reg.Reg {
+						relatedOperands[i].HasValue = true
+						relatedOperands[i].LinkValueType = LinkValueTypeMem
+						relatedOperands[i].LinkMem = &RiscVMem{RegNum: mem.Mem.Base, Offset: mem.Mem.Disp, Value: 0, HasValue: false}
+						//regName := capstone.GetRiscVRegName(relatedOperands[i].LinkMem.RegNum)
+						//logger.ShowAppMsg("Load Related Reg found: [%s][%d], LinkMem:[%s][%d]\n", relatedOperand.RegName, relatedOperand.RegNum, regName, relatedOperands[i].LinkMem.RegNum)
 					}
 				}
-				isFuncCall := isFuncCallInsn(&insn)
-				if isFuncCall {
-					for i, relatedOperand := range relatedOperands {
-						if !relatedOperand.HasValue {
-							continue
+				continue
+			}
+			isStore := isStoreInsn(&insn)
+			if isStore {
+				for i, relatedOperand := range relatedOperands {
+					op0 := insn.Riscv.Operands[0]
+					op1 := insn.Riscv.Operands[1]
+					if !relatedOperand.HasValue {
+						continue
+					}
+					if relatedOperand.LinkValueType == LinkValueTypeMem {
+						// Update LinkMem to Reg
+						isSameBase := relatedOperand.LinkMem.RegNum == op1.Mem.Base
+						isSameOffset := uint(relatedOperand.LinkMem.Offset) == uint(op1.Mem.Disp)
+						if isSameBase && isSameOffset {
+							relatedOperands[i].LinkValueType = LinkValueTypeReg
+							relatedOperands[i].LinkMem = nil
+							regName := capstone.GetRiscVRegName(op0.Reg)
+							relatedOperands[i].LinkReg = &RiscVReg{RegNum: op0.Reg, RegName: regName, HasValue: false}
 						}
-
-						// TODO not only a0, need to check memory
-						if relatedOperand.LinkValueType != LinkValueTypeReg {
-							continue
-						}
-						// update LinkReg → Func
-						//getFuncInfo
-						relatedOperands[i].LinkReg = nil
-						relatedOperands[i].LinkValueType = LinkValueTypeFunc
-						relatedOperands[i].LinkFunc = &RiscVFunc{FuncName: "", Addr: 0}
 					}
 				}
 			}
-			basicBlk.RelatedOperands = relatedOperands
-			basicBlks[entryAddr] = basicBlk
+			isFuncCall := isFuncCallInsn(&insn)
+			if isFuncCall {
+				for i, relatedOperand := range relatedOperands {
+					if !relatedOperand.HasValue {
+						continue
+					}
+
+					// TODO not only a0, need to check memory
+					if relatedOperand.LinkValueType != LinkValueTypeReg {
+						continue
+					}
+					// update LinkReg → Func
+					//getFuncInfo
+					relatedOperands[i].LinkReg = nil
+					relatedOperands[i].LinkValueType = LinkValueTypeFunc
+					relatedOperands[i].LinkFunc = &RiscVFunc{FuncName: "", Addr: 0}
+				}
+			}
 		}
-		slice := SliceInfo{BasicBlks: basicBlks}
-		funcSliceMap[elfFuncInfo.Addr] = slice
+		basicBlk.RelatedOperands = relatedOperands
+		basicBlks[entryAddr] = basicBlk
 	}
+	return SliceInfo{BasicBlks: basicBlks}
 }
 
 func isFuncCallInsn(insn *capstone.Instruction) (isFuncCall bool) {
