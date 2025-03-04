@@ -4,6 +4,7 @@ import (
 	capstone "branch-walker/capstone"
 	elf "branch-walker/elf"
 	logger "branch-walker/logger"
+	dwarf "branch-walker/dwarf"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,10 +27,11 @@ const (
 )
 
 const (
-	LinkValueTypeImm = capstone.RISCV_OP_IMM
-	LinkValueTypeMem = capstone.RISCV_OP_MEM
-	LinkValueTypeReg = capstone.RISCV_OP_REG
-	LinkValueTypeFunc
+	LinkValueTypeReg  = capstone.RISCV_OP_REG
+	LinkValueTypeImm  = capstone.RISCV_OP_IMM
+	LinkValueTypeMem  = capstone.RISCV_OP_MEM
+	LinkValueTypeEval = 0x10
+	LinkValueTypeFunc = LinkValueTypeEval + 1
 )
 
 type RiscVFunc struct {
@@ -66,6 +68,63 @@ type RiscVReg struct {
 	LinkMem       *RiscVMem
 	LinkReg       *RiscVReg
 	LinkFunc      *RiscVFunc
+	LinkExpress   *Expression
+}
+
+// TODO コンテキストを用意して計算すべきか？
+func (reg *RiscVReg) Eval() {
+	for {
+		if !reg.HasValue {
+			break
+		}
+		switch reg.LinkValueType {
+		case LinkValueTypeImm:
+		case LinkValueTypeMem:
+		case LinkValueTypeReg:
+		case LinkValueTypeEval:
+		case LinkValueTypeFunc:
+		default:
+		}
+	}
+}
+
+type Expression struct {
+	DstReg   RiscVReg
+	Ins      string
+	operands []RiscVOperand
+}
+
+func (exp *Expression) Eval() {
+	switch exp.Ins {
+	case "+":
+		//op0 := exp.operands[0]
+		//op1 := exp.operands[1]
+
+	case "-":
+	case "*":
+	case "/":
+	case "&":
+	case "|":
+	case "^":
+	case "<<":
+	case ">>":
+	case "%":
+	default:
+
+	}
+}
+
+type RiscVContext struct {
+	Regs [32]RiscVReg
+	Mem  map[uint64]uint8
+}
+
+func InitializeCtx(ctx *RiscVContext) {
+	for i := 0; i < 32; i++ {
+		regName := capstone.GetRiscVRegName(uint(i))
+		ctx.Regs[i] = RiscVReg{RegNum: uint(i), RegName: regName, HasValue: false}
+	}
+	ctx.Mem = make(map[uint64]uint8)
 }
 
 type CmpCondition struct {
@@ -89,6 +148,9 @@ type SliceInfo struct {
 	BasicBlks map[uint64]BasicBlock
 }
 
+var mvInsnMap = map[string]struct{}{
+	"C.MV": {},
+}
 var fancCallInsnMap = map[string]struct{}{
 	"C.JAL": {},
 }
@@ -167,6 +229,27 @@ func main() {
 		os.Exit(-1)
 	}
 
+	if !targetObj.HasSection(".debug_aranges") {
+		logger.ShowErrorMsg(".debug_aranges section not found. You need to set -g option for build.\n")
+		os.Exit(-1)
+	}
+	debug_aranges := targetObj.GetSectionBinByName(".debug_aranges")
+	aranges := dwarf.ReadAranges(debug_aranges)
+
+	if !targetObj.HasSection(".debug_line") {
+		logger.ShowErrorMsg(".debug_line section not found. You need to set -g option for build.\n")
+		os.Exit(-1)
+	}
+	debug_line := targetObj.GetSectionBinByName(".debug_line")
+	offsetLineInfoMap := dwarf.ReadLineInfo(debug_line, targetObj)
+
+	if !targetObj.HasSection(".debug_info") {
+		logger.ShowErrorMsg(".debug_info section not found. You need to set -g option for build.\n")
+		os.Exit(-1)
+	}
+	debug_info := targetObj.GetSectionBinByName(".debug_info")
+	dwarf.ReadDebugInfo(aranges, debug_info, targetObj, offsetLineInfoMap)
+
 	cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCVC)
 	if err != nil {
 		logger.ShowErrorMsg("Failed to initialize capstone\n")
@@ -181,8 +264,14 @@ func main() {
 
 	funcSliceMap := make(map[uint64]SliceInfo)
 	funcInfos := targetObj.GetFuncsInfos()
-	var elfMainFuncInfo  *elf.ElfFunctionInfo
+	var elfMainFuncInfo *elf.ElfFunctionInfo
 	for i, elfFuncInfo := range funcInfos {
+		if strings.HasPrefix(elfFuncInfo.Name, "__") {
+			continue
+		}
+		if elfFuncInfo.Name != "add" {
+			continue
+		}
 		if elfFuncInfo.Name == "main" {
 			logger.DLog("main function found\n")
 			elfMainFuncInfo = &funcInfos[i]
@@ -279,9 +368,18 @@ func backwardSlice(insns []capstone.Instruction) SliceInfo {
 		relatedOperands := make([]RiscVReg, 0)
 		//logger.ShowAppMsg("**** entryAddr: 0x%X\n", entryAddr)
 		revInsns := capstone.ReverseInsns(insns)
+		foundRetInsn := false
 		for _, insn := range revInsns {
 			//le_bytes := reverse(insn.Bytes)
 			//logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+			isRet := isRetInsn(&insn)
+			if isRet {
+				logger.ShowAppMsg("Ret insn found\n")
+				foundRetInsn = true
+			}
+			if foundRetInsn {
+				// check return value
+			}
 
 			isBransh, _ := isBranchInsn(&insn)
 			if isBransh {
@@ -376,7 +474,7 @@ func backwardSlice(insns []capstone.Instruction) SliceInfo {
 						continue
 					}
 
-					// TODO not only a0, need to check memory
+					// TODO not only a0, need to check memory for output of function...
 					if relatedOperand.LinkValueType != LinkValueTypeReg {
 						continue
 					}
@@ -394,11 +492,56 @@ func backwardSlice(insns []capstone.Instruction) SliceInfo {
 	return SliceInfo{BasicBlks: basicBlks}
 }
 
+func isMvInsn(insn *capstone.Instruction) (isMv bool) {
+	nm := strings.ToUpper(insn.Mnemonic)
+	_, isMv = mvInsnMap[nm]
+	return isMv
+}
+
+func isRetInsn(insn *capstone.Instruction) bool {
+	nm := strings.ToUpper(insn.Mnemonic)
+	logger.DLog(nm)
+	if nm == "C.JR" {
+		op := insn.Riscv.Operands[0]
+		if op.Reg == capstone.RISCV_REG_X1 {
+			return true
+		}
+	}
+	if nm == "JALR" {
+		return true
+	}
+
+	return false
+}
+
+func checkRegUpdate(insn *capstone.Instruction, dstReg uint) (hasUpdate bool) {
+	hasUpdate = false
+	nm := strings.ToUpper(insn.Mnemonic)
+	if nm == "MV" || nm == "C.MV" {
+		hasUpdate = true
+		op0 := insn.Riscv.Operands[0]
+		//op1 := insn.Riscv.Operands[1]
+		if op0.Reg == dstReg {
+			hasUpdate = true
+		}
+	}
+	if nm == "MV" || nm == "C.MV" {
+		hasUpdate = true
+		//op := insn.Riscv.Operands[1]
+		//regName := capstone.GetRiscVRegName(op.Reg)
+	}
+	if nm == "MV" || nm == "C.MV" {
+		hasUpdate = true
+		//op := insn.Riscv.Operands[1]
+		//regName := capstone.GetRiscVRegName(op.Reg)
+	}
+	return hasUpdate
+}
+
 func isFuncCallInsn(insn *capstone.Instruction) (isFuncCall bool) {
 	nm := strings.ToUpper(insn.Mnemonic)
 	_, isFuncCall = fancCallInsnMap[nm]
 	return isFuncCall
-
 }
 
 func isBranchInsn(insn *capstone.Instruction) (isBranch bool, isConditionalBranch bool) {
