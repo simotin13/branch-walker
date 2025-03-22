@@ -2,9 +2,9 @@ package main
 
 import (
 	capstone "branch-walker/capstone"
+	dwarf "branch-walker/dwarf"
 	elf "branch-walker/elf"
 	logger "branch-walker/logger"
-	dwarf "branch-walker/dwarf"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -254,6 +254,11 @@ func main() {
 	if err != nil {
 		logger.ShowErrorMsg("Failed to initialize capstone\n")
 		os.Exit(-1)
+	}
+
+	if targetObj.HasSection(".debug_frame") {
+		eh_frame := targetObj.GetSectionBinByName(".debug_frame")
+		dwarf.ReadFrameInfo(eh_frame)
 	}
 
 	err = cs.Option(capstone.CS_OPT_DETAIL, capstone.CS_OPT_ON)

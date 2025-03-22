@@ -1,8 +1,8 @@
 package dwarf
 
 import (
-	elf "branch-walker/elf"
 	binutil "branch-walker/binutil"
+	elf "branch-walker/elf"
 	logger "branch-walker/logger"
 	"fmt"
 	"path/filepath"
@@ -1406,24 +1406,33 @@ func readBinarySearchTable(tableEnc uint8, bin []byte, fdeCount uint64) uint64 {
 	return offset
 }
 
-func readCfaOperand(cfaOpcode uint8, dwarfFormat uint64, bin []uint8) uint64 {
+// See DWARF2 7.23 Call Frame Information
+func readCfaOperand(bin []uint8, dwarfFormat uint64) uint64 {
 	var offset uint64 = 0
+	cfaOpcode := bin[0]
+	offset++
 	hi2bits := (cfaOpcode & 0xC0) >> 6
 	low6bits := cfaOpcode & 0x3F
 	if hi2bits == DW_CFA_advance_loc {
+		logger.DLog("cfa ins DW_CFA_advance_loc")
 		// TODO
 		return offset
 	}
 	if hi2bits == DW_CFA_offset {
+		logger.DLog("cfa ins DW_CFA_offset")
 		op1Offset, size := ReaduLEB128(bin[offset:])
 		fmt.Println(op1Offset)
 		offset += uint64(size)
 		return offset
 	}
 	if hi2bits == DW_CFA_restore {
+		logger.DLog("cfa ins DW_CFA_restore")
 		// TODO
 		return offset
 	}
+
+	name := CFANameMap[low6bits]
+	logger.DLog("cfa ins:%s", name)
 	switch low6bits {
 	case DW_CFA_nop:
 		// no operand
@@ -1438,12 +1447,15 @@ func readCfaOperand(cfaOpcode uint8, dwarfFormat uint64, bin []uint8) uint64 {
 	case DW_CFA_advance_loc1:
 		// TODO
 		offset += 1
+		break
 	case DW_CFA_advance_loc2:
 		// TODO
 		offset += 2
+		break
 	case DW_CFA_advance_loc4:
 		// TODO
 		offset += 4
+		break
 	case DW_CFA_offset_extended:
 		// TODO
 		// Operand1 register
@@ -1455,12 +1467,41 @@ func readCfaOperand(cfaOpcode uint8, dwarfFormat uint64, bin []uint8) uint64 {
 		_, size = ReaduLEB128(bin[offset:])
 		//fmt.Println(op2Offset)
 		offset += uint64(size)
+		break
 	case DW_CFA_restore_extended:
+		// Operand1 register
+		reg, size := ReaduLEB128(bin[offset:])
+		fmt.Println(reg)
+		offset += uint64(size)
+		break
 	case DW_CFA_undefined:
+		// Operand1 register
+		reg, size := ReaduLEB128(bin[offset:])
+		fmt.Println(reg)
+		offset += uint64(size)
+		break
 	case DW_CFA_same_value:
+		// Operand1 register
+		reg, size := ReaduLEB128(bin[offset:])
+		fmt.Println(reg)
+		offset += uint64(size)
+		break
 	case DW_CFA_register:
+		// TODO
+		// Operand1 register
+		_, size := ReaduLEB128(bin[offset:])
+		//fmt.Println(reg)
+		offset += uint64(size)
+
+		// Operand2 offset
+		_, size = ReaduLEB128(bin[offset:])
+		//fmt.Println(op2Offset)
+		offset += uint64(size)
+		break
 	case DW_CFA_remember_state:
+		break
 	case DW_CFA_restore_state:
+		break
 	case DW_CFA_def_cfa:
 		// TODO
 		// Operand1 register
@@ -1473,21 +1514,17 @@ func readCfaOperand(cfaOpcode uint8, dwarfFormat uint64, bin []uint8) uint64 {
 		fmt.Println(Op2Offset)
 		offset += uint64(size)
 	case DW_CFA_def_cfa_register:
+		// Operand2 offset
+		cfa_reg, size := ReaduLEB128(bin[offset:])
+		fmt.Println(cfa_reg)
+		offset += uint64(size)
 	case DW_CFA_def_cfa_offset:
-		fmt.Println("!!!!")
-	case DW_CFA_def_cfa_expression:
-	case DW_CFA_expression:
-	case DW_CFA_offset_extended_sf:
-	case DW_CFA_def_cfa_sf:
-	case DW_CFA_def_cfa_offset_sf:
-	case DW_CFA_val_offset:
-	case DW_CFA_val_offset_sf:
-	case DW_CFA_val_expression:
-	case DW_CFA_lo_user:
-	case DW_CFA_hi_user:
-	case DW_CFA_GNU_args_size:
-	case DW_CFA_GNU_negative_offset_extended:
+		// TODO
+		cfaOffset, size := ReaduLEB128(bin[offset:])
+		logger.DLog("cfaOffset:0x%X", cfaOffset)
+		offset += uint64(size)
 	default:
+		logger.DLog("unexpected ins:0x%X", cfaOpcode)
 		panic("unexpected cfa")
 	}
 
@@ -1533,6 +1570,7 @@ func ReadFrameInfo(bin []byte) {
 	logger.DLog("%d", cieId)
 
 	// version ubyte
+	// DWARF 2: 1, DWARF 3: 3, DWARF 4: 4
 	version := uint8(bin[offset])
 	offset += 1
 	logger.DLog("%d", version)
@@ -1605,95 +1643,106 @@ func ReadFrameInfo(bin []byte) {
 		}
 	}
 
+	// std::uint8_t fde_pointer_encoding = DW_EH_PE_udata8 | DW_EH_PE_absptr;
+	// fde_pointer_encoding := 4
 	// initial_instructions
 	// array of DW_CFA_xxx
 	insPos := 0
 	insLen := unitLengthSize + int(initialLength) - int(offset)
 	for insPos < insLen {
-		initialIns := bin[offset]
-		offset++
-		insPos++
-		insSize := readCfaOperand(initialIns, dwarfFormat, bin[offset:])
+		insSize := readCfaOperand(bin[offset:], dwarfFormat)
 		offset += uint64(insSize)
 		insPos += int(insSize)
 	}
 	logger.DLog("%d", offset)
 
+	// ====================================================
 	// FDE Frame Description Entry Format
-	// unit_length initial length(4 or 8 bytes)
-	tmp, _ = binutil.FromLeToUInt32(bin[offset:])
-	offset += 4
+	// Note: for DWARF 2
+	// ====================================================
+	secSize := uint64(len(bin))
+	for offset < secSize {
 
-	// initial length
-	var fdeInitialLength uint64 = 0
+		// length
+		length, _ := binutil.FromLeToUInt32(bin[offset:])
+		offset += 4
+		logger.DLog("length: %d", length)
 
-	if tmp < 0xffffff00 {
-		// 32-bit DWARF Format
-		fdeInitialLength = uint64(tmp)
-		dwarfFormat = DWARF_32BIT_FORMAT
-	} else {
-		// 64-bit DWARF Format
-		fdeInitialLength, _ = binutil.FromLeToUInt64(bin[offset:])
-		dwarfFormat = DWARF_64BIT_FORMAT
-		offset += 8
-	}
+		// CIE Pointer
+		ciePointer, _ := binutil.FromLeToUInt32(bin[offset:])
+		offset += 4
+		logger.DLog("ciePointer: 0x%X\n", ciePointer)
 
-	logger.DLog("%d", fdeInitialLength)
+		// initial_location
+		// TODO: addressSize: 4
+		initial_location, _ := binutil.FromLeToUInt32(bin[offset:])
+		offset += 4
+		logger.DLog("initial_location: 0x%X\n", initial_location)
 
-	var fdeOffset = offset
+		// address_range
+		// TODO: addressSize: 4
+		address_range, _ := binutil.FromLeToUInt32(bin[offset:])
+		offset += 4
+		logger.DLog("address_range: 0x%X\n", address_range)
 
-	// CIE Pointer
-	ciePointer, _ := binutil.FromLeToUInt32(bin[offset:])
-	offset += 4
-	logger.DLog("ciePointer: 0x%X\n", ciePointer)
-
-	// PC Begin
-	pcBegin, size := readExceptionHeaderEncodedField(ptrEnc, bin[offset:])
-	offset += uint64(size)
-	logger.DLog("pcBegin: 0x%X\n", uint32(pcBegin.sVal))
-
-	// PC Range
-	_, size = readExceptionHeaderEncodedField(ptrEnc, bin[offset:])
-	//fmt.Println(pcRange)
-	offset += uint64(size)
-
-	// Augmentation Length
-	// An unsigned LEB128 encoded value indicating the length in bytes of the Augmentation Data.
-	// This field is only present if the Augmentation String contains the character 'z'.
-	if strings.Contains(augmentation, "z") {
-		AugmentationLength, size = ReaduLEB128(bin[offset:])
-		offset += uint64(size)
-	}
-
-	// Augmentation Data
-	// A block of data whose contents are defined by the contents of the Augmentation String as described below.
-	// This field is only present if the Augmentation String contains the character 'z'.
-	if strings.Contains(augmentation, "z") {
-		var augDataPos uint64 = 0
-		for augDataPos < AugmentationLength {
-			if strings.Contains(augmentation, "R") {
-				// "zR"
-				// A 'R' may be present at any position after the first character of the string.
-				// This character may only be present if 'z' is the first character of the string.
-				// If present, The Augmentation Data shall include a 1 byte argument that represents the pointer encoding for the address pointers used in the FDE.
-				// TODO
-				//ptrEnc = bin[offset]
-				offset += 1
-				augDataPos += 1
-				//fmt.Println(ptrEnc)
-			} else {
-				panic("Unexpected augmentation")
-			}
+		var insTotal uint64 = 0
+		for insTotal < uint64(address_range) {
+			insSize := readCfaOperand(bin[offset:], dwarfFormat)
+			logger.DLog("**** insSize:%d", insSize)
+			insTotal += insSize
+			offset += uint64(insSize)
 		}
 	}
 
-	// Call Frame Instructions
-	cfiLength := offset - fdeOffset
-	for i := 0; i < int(cfiLength); i++ {
-		//cfi := bin[offset]
-		offset += 1
-		//fmt.Println(CFANameMap[cfi])
-	}
+	/*
+		// PC Begin
+		pcBegin, size := readExceptionHeaderEncodedField(ptrEnc, bin[offset:])
+		offset += uint64(size)
+		logger.DLog("pcBegin: 0x%X\n", uint32(pcBegin.sVal))
+
+		// PC Range
+		_, size = readExceptionHeaderEncodedField(ptrEnc, bin[offset:])
+		//fmt.Println(pcRange)
+		offset += uint64(size)
+
+		// Augmentation Length
+		// An unsigned LEB128 encoded value indicating the length in bytes of the Augmentation Data.
+		// This field is only present if the Augmentation String contains the character 'z'.
+		if strings.Contains(augmentation, "z") {
+			AugmentationLength, size = ReaduLEB128(bin[offset:])
+			offset += uint64(size)
+		}
+
+		// Augmentation Data
+		// A block of data whose contents are defined by the contents of the Augmentation String as described below.
+		// This field is only present if the Augmentation String contains the character 'z'.
+		if strings.Contains(augmentation, "z") {
+			var augDataPos uint64 = 0
+			for augDataPos < AugmentationLength {
+				if strings.Contains(augmentation, "R") {
+					// "zR"
+					// A 'R' may be present at any position after the first character of the string.
+					// This character may only be present if 'z' is the first character of the string.
+					// If present, The Augmentation Data shall include a 1 byte argument that represents the pointer encoding for the address pointers used in the FDE.
+					// TODO
+					//ptrEnc = bin[offset]
+					offset += 1
+					augDataPos += 1
+					//fmt.Println(ptrEnc)
+				} else {
+					panic("Unexpected augmentation")
+				}
+			}
+		}
+
+		// Call Frame Instructions
+		cfiLength := offset - fdeOffset
+		for i := 0; i < int(cfiLength); i++ {
+			//cfi := bin[offset]
+			offset += 1
+			//fmt.Println(CFANameMap[cfi])
+		}
+	*/
 
 }
 
