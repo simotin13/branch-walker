@@ -1171,12 +1171,40 @@ type Dwarf32LineInfoHdr struct {
 	Files                     []FileNameInfo
 }
 
+type Dwarf32CFI struct {
+}
+
+type Dwarf32Var struct {
+	Name     string
+	FileName string
+	Line     uint32
+	Colmun   uint32
+	Type     uint64
+	Location Dwarf32Location
+}
+
+type Dwarf32Location struct {
+	Reg    uint32
+	Offset int32
+}
+
+const (
+	FRAME_TYPE_CFI = 0
+)
+
+type Dwarf32FrameBase struct {
+	Type int
+}
+
 type Dwarf32FuncInfo struct {
 	SrcFilePath string
 	Name        string
 	LinkageName string
 	Addr        uint64
 	Size        uint32
+	FrameBase   uint32
+	Args        []Dwarf32Var
+	LocalVars   []Dwarf32Var
 }
 
 type Dwarf32CuDebugInfo struct {
@@ -1740,7 +1768,23 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 			abbrev := abbrevMap[id]
 			offset += uint64(size)
 
-			dwarfFuncInfo := Dwarf32FuncInfo{}
+			var dwarfFuncInfo *Dwarf32FuncInfo = nil
+			var funcArg *Dwarf32Var = nil
+			var localVar *Dwarf32Var = nil
+			if abbrev.Tag == DW_TAG_subprogram {
+				dwarfFuncInfo = &Dwarf32FuncInfo{}
+			}
+
+			if abbrev.Tag == DW_TAG_variable {
+				localVar = &Dwarf32Var{}
+			}
+			if abbrev.Tag == DW_TAG_formal_parameter {
+				funcArg = &Dwarf32Var{}
+			}
+
+			if entryOffset == 0x955 {
+				logger.TLog("!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+			}
 
 			for _, attr := range abbrev.Attrs {
 				attrName := AttrNameMap[attr.Attr]
@@ -1768,7 +1812,9 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 					// DW_AT_low_pc  is function start address,
 					// DW_AT_high_pc is function end address,
 					if attr.Attr == DW_AT_low_pc {
-						dwarfFuncInfo.Addr = funcaddr
+						if abbrev.Tag == DW_TAG_subprogram {
+							dwarfFuncInfo.Addr = funcaddr
+						}
 					}
 					offset += uint64(cuh.AddressSize)
 				case DW_FORM_block2:
@@ -1819,12 +1865,35 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 					// P207 TOOD DW_FORM_implicit_const
 					by := debug_info[offset]
 					offset += 1
+					logger.TLog("Attr: %s value:0x%02x\n", attrName, by)
 					if attr.Attr == DW_AT_decl_file {
 						lineInfoHdr := offsetLineInfoMap[cuLineInfoOffset]
 						fileName := lineInfoHdr.Files[by-1].Name
 						logger.TLog("Attr: %s filename:%s\n", attrName, fileName)
-					} else {
-						logger.TLog("Attr: %s value:0x%02x\n", attrName, by)
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							funcArg.FileName = fileName
+						}
+						if abbrev.Tag == DW_TAG_variable {
+							localVar.FileName = fileName
+						}
+					}
+					if attr.Attr == DW_AT_decl_line {
+						logger.TLog("decl_line: %d\n", by)
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							funcArg.Line = uint32(by)
+						}
+						if abbrev.Tag == DW_TAG_variable {
+							localVar.Line = uint32(by)
+						}
+					}
+					if attr.Attr == DW_AT_decl_column {
+						logger.TLog("decl_column: %d\n", by)
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							funcArg.Colmun = uint32(by)
+						}
+						if abbrev.Tag == DW_TAG_variable {
+							localVar.Colmun = uint32(by)
+						}
 					}
 				case DW_FORM_data2:
 					// TODO check value
@@ -1833,6 +1902,25 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 					if attr.Attr == DW_AT_high_pc {
 						dwarfFuncInfo.Size = uint32(val)
 					}
+					if attr.Attr == DW_AT_decl_line {
+						logger.TLog("decl_line: %d\n", val)
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							funcArg.Line = uint32(val)
+						}
+						if abbrev.Tag == DW_TAG_variable {
+							localVar.Line = uint32(val)
+						}
+					}
+					if attr.Attr == DW_AT_decl_column {
+						logger.TLog("decl_column: %d\n", val)
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							funcArg.Colmun = uint32(val)
+						}
+						if abbrev.Tag == DW_TAG_variable {
+							localVar.Colmun = uint32(val)
+						}
+					}
+
 					if attr.Attr == DW_AT_language {
 						lang := "unknown language"
 						lang, exist := langNameMap[val]
@@ -1846,7 +1934,27 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 					val, _ := binutil.FromLeToUInt32(debug_info[offset:])
 					logger.TLog("Attr: %s value:0x%08x\n", attrName, val)
 					if attr.Attr == DW_AT_high_pc {
-						dwarfFuncInfo.Size = uint32(val)
+						if dwarfFuncInfo != nil {
+							dwarfFuncInfo.Size = uint32(val)
+						}
+					}
+					if attr.Attr == DW_AT_decl_line {
+						logger.TLog("decl_line: %d\n", val)
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							funcArg.Line = uint32(val)
+						}
+						if abbrev.Tag == DW_TAG_variable {
+							localVar.Line = uint32(val)
+						}
+					}
+					if attr.Attr == DW_AT_decl_column {
+						logger.TLog("decl_column: %d\n", val)
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							funcArg.Colmun = uint32(val)
+						}
+						if abbrev.Tag == DW_TAG_variable {
+							localVar.Colmun = uint32(val)
+						}
 					}
 					offset += 4
 				case DW_FORM_data8:
@@ -1869,6 +1977,9 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 						} else {
 							panic("not name!")
 						}
+					}
+					if abbrev.Tag == DW_TAG_formal_parameter {
+						funcArg.Name = str
 					}
 				case DW_FORM_block: // LEB128
 					// TODO use Block info
@@ -1910,7 +2021,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 						fTmp, exist := cppTmpFunc[refval]
 						if exist {
 							// take function reference
-							dwarfFuncInfo = fTmp
+							dwarfFuncInfo = &fTmp
 						} else {
 							// TODO check func or variable
 							logger.DLog("ref func not found")
@@ -1918,15 +2029,13 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 					} else if attr.Attr == DW_AT_sibling {
 
 					} else if attr.Attr == DW_AT_type {
-
-					} else {
-						fmt.Println("!!!!!!!!!!!!!")
-					}
-					/*
-						if attr.Attr == DW_AT_frame_base {
-							fmt.Println("!!!!!!!!!!!!!")
+						if abbrev.Tag == DW_TAG_formal_parameter {
+							// TODO: TypeはDIEのオフセットになっているので別途解釈が必要
+							funcArg.Type = refval
 						}
-					*/
+					} else {
+						fmt.Println("!!!! unhandled attr:%d", attr.Attr)
+					}
 					offset += 4
 				case DW_FORM_sec_offset:
 					switch attr.Attr {
@@ -2116,7 +2225,17 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 							offset += uint64(size)
 							i += size
 							logger.TLog("\toperand:%d\n", operand)
+							if abbrev.Tag == DW_TAG_variable {
+								localVar.Location.Offset = int32(operand)
+							}
+							if abbrev.Tag == DW_TAG_formal_parameter {
+								// TODO: Location.Reg をCFIを元に初期化すべき
+								funcArg.Location.Offset = int32(operand)
+							}
 						case DW_OP_call_frame_cfa:
+							// TODO: フレームベースの種別だけでよいか？
+							// → call_frame_cfa以外に何がある？
+							dwarfFuncInfo.FrameBase = FRAME_TYPE_CFI
 							// no operand
 						case DW_OP_lit0:
 							fallthrough
@@ -2377,6 +2496,23 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 					panic("unknown")
 				}
 			}
+			if abbrev.Tag == DW_TAG_formal_parameter {
+				// Add argument to FuncInfo
+				logger.DLog("Add Arg, Name:%s", funcArg.Name)
+				if dwarfFuncInfo != nil {
+					// TAGがsubroutine_typeの場合は関数情報は作成していない
+					dwarfFuncInfo.Args = append(dwarfFuncInfo.Args, *funcArg)
+				}
+			}
+			if abbrev.Tag == DW_TAG_variable {
+				// Add local variable to FuncInfo
+				logger.DLog("Add local Variable, Name:%s", localVar.Name)
+				if dwarfFuncInfo != nil {
+					// グローバル変数も variableとして定義されるため、関数の場合のみ追加
+					dwarfFuncInfo.LocalVars = append(dwarfFuncInfo.LocalVars, *localVar)
+				}
+			}
+
 			if abbrev.Tag == DW_TAG_subprogram {
 				if dwarfFuncInfo.Name == "" {
 					dbgFunc, exist := cuDbgInfo.Funcs[dwarfFuncInfo.Addr]
@@ -2384,7 +2520,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 						logger.TLog("name:%s, addr:0x%X already registed\n", dbgFunc.Name, dwarfFuncInfo.Addr)
 					} else {
 						// TODO For Rust
-						cppTmpFunc[uint64(entryOffset)] = dwarfFuncInfo
+						cppTmpFunc[uint64(entryOffset)] = *dwarfFuncInfo
 						logger.DLog("addr:0x:%x function not found\n", dwarfFuncInfo.Addr)
 						count++
 						// TODO Comment out For Rust
@@ -2395,10 +2531,10 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 				if dwarfFuncInfo.Addr != 0 {
 					// skip if addr not set(must be library function)
 					logger.TLog("name:%s, linkageName:%s addr:0x%X\n", dwarfFuncInfo.Name, dwarfFuncInfo.LinkageName, dwarfFuncInfo.Addr)
-					cuDbgInfo.Funcs[dwarfFuncInfo.Addr] = dwarfFuncInfo
+					cuDbgInfo.Funcs[dwarfFuncInfo.Addr] = *dwarfFuncInfo
 				} else {
 					// addr not fixed, maybe c++ function delc, add tmpFuncs
-					cppTmpFunc[uint64(entryOffset)] = dwarfFuncInfo
+					cppTmpFunc[uint64(entryOffset)] = *dwarfFuncInfo
 				}
 			}
 			count++
