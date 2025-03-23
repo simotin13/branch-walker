@@ -1171,7 +1171,30 @@ type Dwarf32LineInfoHdr struct {
 	Files                     []FileNameInfo
 }
 
-type Dwarf32CFI struct {
+// Common Information Entry
+type Dwarf32CIE struct {
+	CIE_id                uint32
+	Version               uint8
+	Augmentation          string // 1: DWARF2 3: DWARF3 4: DWARF4
+	AddressSize           uint8  // Only exists DWARF4
+	SegmentSize           uint8  // Only exists DWARF4
+	CodeAlignmentFactor   uint32
+	DataAlignmentFactor   uint32
+	ReturnAddressRegister uint8
+	Program               []uint8
+}
+
+type Dwarf32FDE struct {
+	Length          uint32
+	CIEPointer      uint32
+	InitialLocation uint32
+	AddressRange    uint32
+	Program         []uint8
+}
+
+type Dwarf32FrameInfo struct {
+	CIEs []Dwarf32CIE
+	FDEs []Dwarf32FDE
 }
 
 type Dwarf32Var struct {
@@ -1553,8 +1576,10 @@ func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 	return offset
 }
 
-func ReadFrameInfo(bin []byte) {
-	// .eh_frame
+func ReadFrameInfo(bin []byte) Dwarf32FrameInfo {
+
+	var frameInfo Dwarf32FrameInfo
+	// .debug_frame
 	var offset uint64 = 0
 	unitLengthSize := 4
 	// unit_length initial length(4 or 8 bytes)
@@ -1565,6 +1590,7 @@ func ReadFrameInfo(bin []byte) {
 	var initialLength uint64 = 0
 	var dwarfFormat uint64 = 0
 
+	var cie Dwarf32CIE
 	if tmp < 0xffffff00 {
 		// 32-bit DWARF Format
 		initialLength = uint64(tmp)
@@ -1590,16 +1616,19 @@ func ReadFrameInfo(bin []byte) {
 		offset += 8
 	}
 	logger.DLog("%d", cieId)
+	cie.CIE_id = uint32(cieId)
 
 	// version ubyte
 	// DWARF 2: 1, DWARF 3: 3, DWARF 4: 4
 	version := uint8(bin[offset])
+	cie.Version = version
 	offset += 1
 	logger.DLog("%d", version)
 
 	// augmentation
 	// NULL terminated UTF-8 string
 	augmentation := binutil.GetString(bin, offset)
+	cie.Augmentation = augmentation
 	offset += uint64(len(augmentation) + 1)
 
 	// "eh" If the Augmentation string has the value "eh", then the EH Data field shall be present.
@@ -1620,16 +1649,19 @@ func ReadFrameInfo(bin []byte) {
 
 	// code_alignment_factor
 	codeAlignmentFactor, size := ReaduLEB128(bin[offset:])
+	cie.CodeAlignmentFactor = uint32(codeAlignmentFactor)
 	logger.DLog("%d", codeAlignmentFactor)
 	offset += uint64(size)
 
 	// data_alignment_factor
 	dataAlignmentFactor, size := ReadsLEB128(bin[offset:])
+	cie.DataAlignmentFactor = uint32(dataAlignmentFactor)
 	logger.DLog("%d", dataAlignmentFactor)
 	offset += uint64(size)
 
 	// return_address_register
 	return_address_register, size := ReaduLEB128(bin[offset:])
+	cie.ReturnAddressRegister = uint8(return_address_register)
 	logger.DLog("%d", return_address_register)
 	offset += uint64(size)
 
@@ -1669,14 +1701,19 @@ func ReadFrameInfo(bin []byte) {
 	// fde_pointer_encoding := 4
 	// initial_instructions
 	// array of DW_CFA_xxx
-	insPos := 0
-	insLen := unitLengthSize + int(initialLength) - int(offset)
+	var insPos uint64 = 0
+	insLen := uint64(unitLengthSize + int(initialLength) - int(offset))
+	progStart := offset
+	progEnd := uint64(offset + insLen)
+	program := bin[progStart:progEnd]
+	cie.Program = program
 	for insPos < insLen {
 		insSize := readCFAInstruction(bin[offset:], dwarfFormat)
 		offset += uint64(insSize)
-		insPos += int(insSize)
+		insPos += uint64(insSize)
 	}
 	logger.DLog("%d", offset)
+	frameInfo.CIEs = append(frameInfo.CIEs, cie)
 
 	// ====================================================
 	// FDE Frame Description Entry Format
@@ -1684,37 +1721,46 @@ func ReadFrameInfo(bin []byte) {
 	// ====================================================
 	secSize := uint64(len(bin))
 	for offset < secSize {
-
+		var fde Dwarf32FDE
 		// length
 		length, _ := binutil.FromLeToUInt32(bin[offset:])
+		fde.Length = length
 		offset += 4
 		logger.DLog("length: %d", length)
 
 		// CIE Pointer
 		ciePointer, _ := binutil.FromLeToUInt32(bin[offset:])
+		fde.CIEPointer = ciePointer
 		offset += 4
 		logger.DLog("ciePointer: 0x%X\n", ciePointer)
 
 		// initial_location
 		// TODO: addressSize: 4
 		initial_location, _ := binutil.FromLeToUInt32(bin[offset:])
+		fde.InitialLocation = initial_location
 		offset += 4
 		logger.DLog("initial_location: 0x%X\n", initial_location)
 
 		// address_range
 		// TODO: addressSize: 4
 		address_range, _ := binutil.FromLeToUInt32(bin[offset:])
+		fde.AddressRange = address_range
 		offset += 4
 		logger.DLog("address_range: 0x%X\n", address_range)
 
 		var insTotal uint64 = 0
-		insLength := length - 12
-		for insTotal < uint64(insLength) {
+		progStart := offset
+		progLength := uint64(length - 12)
+		progEnd := offset + progLength
+		fde.Program = bin[progStart:progEnd]
+		for insTotal < progLength {
 			insSize := readCFAInstruction(bin[offset:], dwarfFormat)
 			insTotal += insSize
 			offset += uint64(insSize)
 		}
+		frameInfo.FDEs = append(frameInfo.FDEs, fde)
 	}
+	return frameInfo
 }
 
 func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []byte, elfObj elf.ElfObject, offsetLineInfoMap map[uint64]Dwarf32LineInfoHdr) []Dwarf32CuDebugInfo {

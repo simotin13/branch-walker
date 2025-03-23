@@ -243,6 +243,13 @@ func main() {
 	debug_line := targetObj.GetSectionBinByName(".debug_line")
 	offsetLineInfoMap := dwarf.ReadLineInfo(debug_line, targetObj)
 
+	if !targetObj.HasSection(".debug_frame") {
+		logger.ShowErrorMsg(".debug_frame section not found. You need to set -g option for build.\n")
+		os.Exit(-1)
+	}
+	debug_frame := targetObj.GetSectionBinByName(".debug_frame")
+	dwarf.ReadFrameInfo(debug_frame)
+
 	if !targetObj.HasSection(".debug_info") {
 		logger.ShowErrorMsg(".debug_info section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
@@ -254,11 +261,6 @@ func main() {
 	if err != nil {
 		logger.ShowErrorMsg("Failed to initialize capstone\n")
 		os.Exit(-1)
-	}
-
-	if targetObj.HasSection(".debug_frame") {
-		eh_frame := targetObj.GetSectionBinByName(".debug_frame")
-		dwarf.ReadFrameInfo(eh_frame)
 	}
 
 	err = cs.Option(capstone.CS_OPT_DETAIL, capstone.CS_OPT_ON)
