@@ -1407,7 +1407,7 @@ func readBinarySearchTable(tableEnc uint8, bin []byte, fdeCount uint64) uint64 {
 }
 
 // See DWARF2 7.23 Call Frame Information
-func readCfaOperand(bin []uint8, dwarfFormat uint64) uint64 {
+func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 	var offset uint64 = 0
 	cfaOpcode := bin[0]
 	offset++
@@ -1420,8 +1420,7 @@ func readCfaOperand(bin []uint8, dwarfFormat uint64) uint64 {
 	}
 	if hi2bits == DW_CFA_offset {
 		logger.DLog("cfa ins DW_CFA_offset")
-		op1Offset, size := ReaduLEB128(bin[offset:])
-		fmt.Println(op1Offset)
+		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
 		return offset
 	}
@@ -1470,20 +1469,17 @@ func readCfaOperand(bin []uint8, dwarfFormat uint64) uint64 {
 		break
 	case DW_CFA_restore_extended:
 		// Operand1 register
-		reg, size := ReaduLEB128(bin[offset:])
-		fmt.Println(reg)
+		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
 		break
 	case DW_CFA_undefined:
 		// Operand1 register
-		reg, size := ReaduLEB128(bin[offset:])
-		fmt.Println(reg)
+		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
 		break
 	case DW_CFA_same_value:
 		// Operand1 register
-		reg, size := ReaduLEB128(bin[offset:])
-		fmt.Println(reg)
+		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
 		break
 	case DW_CFA_register:
@@ -1505,13 +1501,11 @@ func readCfaOperand(bin []uint8, dwarfFormat uint64) uint64 {
 	case DW_CFA_def_cfa:
 		// TODO
 		// Operand1 register
-		reg, size := ReaduLEB128(bin[offset:])
-		fmt.Println(reg)
+		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
 
 		// Operand2 offset
-		Op2Offset, size := ReaduLEB128(bin[offset:])
-		fmt.Println(Op2Offset)
+		_, size = ReaduLEB128(bin[offset:])
 		offset += uint64(size)
 	case DW_CFA_def_cfa_register:
 		// Operand2 offset
@@ -1650,7 +1644,7 @@ func ReadFrameInfo(bin []byte) {
 	insPos := 0
 	insLen := unitLengthSize + int(initialLength) - int(offset)
 	for insPos < insLen {
-		insSize := readCfaOperand(bin[offset:], dwarfFormat)
+		insSize := readCFAInstruction(bin[offset:], dwarfFormat)
 		offset += uint64(insSize)
 		insPos += int(insSize)
 	}
@@ -1686,64 +1680,13 @@ func ReadFrameInfo(bin []byte) {
 		logger.DLog("address_range: 0x%X\n", address_range)
 
 		var insTotal uint64 = 0
-		for insTotal < uint64(address_range) {
-			insSize := readCfaOperand(bin[offset:], dwarfFormat)
-			logger.DLog("**** insSize:%d", insSize)
+		insLength := length - 12
+		for insTotal < uint64(insLength) {
+			insSize := readCFAInstruction(bin[offset:], dwarfFormat)
 			insTotal += insSize
 			offset += uint64(insSize)
 		}
 	}
-
-	/*
-		// PC Begin
-		pcBegin, size := readExceptionHeaderEncodedField(ptrEnc, bin[offset:])
-		offset += uint64(size)
-		logger.DLog("pcBegin: 0x%X\n", uint32(pcBegin.sVal))
-
-		// PC Range
-		_, size = readExceptionHeaderEncodedField(ptrEnc, bin[offset:])
-		//fmt.Println(pcRange)
-		offset += uint64(size)
-
-		// Augmentation Length
-		// An unsigned LEB128 encoded value indicating the length in bytes of the Augmentation Data.
-		// This field is only present if the Augmentation String contains the character 'z'.
-		if strings.Contains(augmentation, "z") {
-			AugmentationLength, size = ReaduLEB128(bin[offset:])
-			offset += uint64(size)
-		}
-
-		// Augmentation Data
-		// A block of data whose contents are defined by the contents of the Augmentation String as described below.
-		// This field is only present if the Augmentation String contains the character 'z'.
-		if strings.Contains(augmentation, "z") {
-			var augDataPos uint64 = 0
-			for augDataPos < AugmentationLength {
-				if strings.Contains(augmentation, "R") {
-					// "zR"
-					// A 'R' may be present at any position after the first character of the string.
-					// This character may only be present if 'z' is the first character of the string.
-					// If present, The Augmentation Data shall include a 1 byte argument that represents the pointer encoding for the address pointers used in the FDE.
-					// TODO
-					//ptrEnc = bin[offset]
-					offset += 1
-					augDataPos += 1
-					//fmt.Println(ptrEnc)
-				} else {
-					panic("Unexpected augmentation")
-				}
-			}
-		}
-
-		// Call Frame Instructions
-		cfiLength := offset - fdeOffset
-		for i := 0; i < int(cfiLength); i++ {
-			//cfi := bin[offset]
-			offset += 1
-			//fmt.Println(CFANameMap[cfi])
-		}
-	*/
-
 }
 
 func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []byte, elfObj elf.ElfObject, offsetLineInfoMap map[uint64]Dwarf32LineInfoHdr) []Dwarf32CuDebugInfo {
