@@ -255,7 +255,7 @@ func main() {
 		os.Exit(-1)
 	}
 	debug_info := targetObj.GetSectionBinByName(".debug_info")
-	dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
+	dbgInfos := dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
 
 	cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCVC)
 	if err != nil {
@@ -276,12 +276,12 @@ func main() {
 		if strings.HasPrefix(elfFuncInfo.Name, "__") {
 			continue
 		}
-		if elfFuncInfo.Name != "add" {
-			continue
-		}
 		if elfFuncInfo.Name == "main" {
 			logger.DLog("main function found\n")
 			elfMainFuncInfo = &funcInfos[i]
+			continue
+		}
+		if elfFuncInfo.Name != "add" {
 			continue
 		}
 		loadAddr, err := targetObj.GetSectionLoadAddrByName(elfFuncInfo.SecName)
@@ -310,6 +310,17 @@ func main() {
 		}
 		funcSlice := backwardSlice(insns)
 		funcSliceMap[elfFuncInfo.Addr] = funcSlice
+		basicBlk, exist := funcSlice.BasicBlks[elfFuncInfo.Addr]
+		if exist {
+			for _, relatedOperand := range basicBlk.RelatedOperands {
+				logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
+				if relatedOperand.HasValue {
+					logger.ShowErrorMsg("LinkValue Type:[%d]\n", relatedOperand.LinkValueType)
+				} else {
+					logger.ShowErrorMsg("\n")
+				}
+			}
+		}
 	}
 
 	if elfMainFuncInfo != nil {
@@ -337,6 +348,37 @@ func main() {
 
 			funcSlice := backwardSlice(insns)
 			funcSliceMap[elfMainFuncInfo.Addr] = funcSlice
+
+			basicBlk, exist := funcSlice.BasicBlks[elfMainFuncInfo.Addr]
+			if exist {
+				for _, relatedOperand := range basicBlk.RelatedOperands {
+					logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
+					if relatedOperand.HasValue {
+						logger.ShowErrorMsg("LinkValue Type:[%d]\n", relatedOperand.LinkValueType)
+					} else {
+						logger.ShowErrorMsg("\n")
+					}
+				}
+			}
+
+		}
+
+		for _, dbgInfo := range dbgInfos {
+			dbgFunc, exist := dbgInfo.Funcs[elfMainFuncInfo.Addr]
+			if !exist {
+				continue
+			}
+			logger.DLog("Name:%s(%s), Addr:0x%0X, SrcFile:%s, FrameBase:%d\n", dbgFunc.Name, dbgFunc.LinkageName, dbgFunc.Addr, dbgFunc.SrcFilePath, dbgFunc.FrameBase)
+
+			logger.DLog("Args: %d\n", len(dbgFunc.Args))
+			for _, arg := range dbgFunc.Args {
+				logger.DLog("Name:%s, Location(Reg:%d, Offset:%d)\n", arg.Name, arg.Location.Reg, arg.Location.Offset)
+			}
+
+			logger.DLog("Local Vars: %d\n", len(dbgFunc.LocalVars))
+			for _, arg := range dbgFunc.LocalVars {
+				logger.DLog("Name:%s, Location(Reg:%d, Offset:%d)\n", arg.Name, arg.Location.Reg, arg.Location.Offset)
+			}
 		}
 	}
 }
@@ -397,7 +439,7 @@ func backwardSlice(insns []capstone.Instruction) SliceInfo {
 				operand = insn.Riscv.Operands[1]
 				reg1Num := operand.Reg
 				reg1Name := capstone.GetRiscVRegName(operand.Reg)
-				//logger.ShowAppMsg("reg0:%s[%d], reg1:%s[%d]\n", reg0Name, reg0Num, reg1Name, reg1Num)
+				logger.ShowAppMsg("reg0:%s[%d], reg1:%s[%d]\n", reg0Name, reg0Num, reg1Name, reg1Num)
 				relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg0Num, RegName: reg0Name, HasValue: false})
 				relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg1Num, RegName: reg1Name, HasValue: false})
 				continue

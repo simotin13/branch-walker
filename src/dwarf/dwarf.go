@@ -1859,10 +1859,6 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 			abbrev := abbrevMap[id]
 			offset += uint64(size)
 
-			if entryOffset == 0x915 {
-				logger.TLog("!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-			}
-
 			if abbrev.Tag == DW_TAG_subprogram {
 				dwarfFuncInfo = &Dwarf32FuncInfo{}
 			}
@@ -2072,6 +2068,9 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 					}
 					if abbrev.Tag == DW_TAG_formal_parameter {
 						funcArg.Name = str
+					}
+					if abbrev.Tag == DW_TAG_variable {
+						localVar.Name = str
 					}
 				case DW_FORM_block: // LEB128
 					// TODO use Block info
