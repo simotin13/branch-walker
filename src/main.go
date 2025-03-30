@@ -248,14 +248,14 @@ func main() {
 		os.Exit(-1)
 	}
 	debug_frame := targetObj.GetSectionBinByName(".debug_frame")
-	dwarf.ReadFrameInfo(debug_frame)
+	frameInfo := dwarf.ReadFrameInfo(debug_frame)
 
 	if !targetObj.HasSection(".debug_info") {
 		logger.ShowErrorMsg(".debug_info section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
 	debug_info := targetObj.GetSectionBinByName(".debug_info")
-	dwarf.ReadDebugInfo(aranges, debug_info, targetObj, offsetLineInfoMap)
+	dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
 
 	cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCVC)
 	if err != nil {

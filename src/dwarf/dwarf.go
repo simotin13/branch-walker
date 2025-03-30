@@ -1187,6 +1187,7 @@ type Dwarf32CIE struct {
 type Dwarf32FDE struct {
 	Length          uint32
 	CIEPointer      uint32
+	CIEIdx          uint32
 	InitialLocation uint32
 	AddressRange    uint32
 	Program         []uint8
@@ -1194,7 +1195,12 @@ type Dwarf32FDE struct {
 
 type Dwarf32FrameInfo struct {
 	CIEs []Dwarf32CIE
-	FDEs []Dwarf32FDE
+	FDEs map[uint64]Dwarf32FDE // address-FDE map
+}
+
+type Dwarf32Location struct {
+	Reg    uint32
+	Offset int32
 }
 
 type Dwarf32Var struct {
@@ -1204,11 +1210,6 @@ type Dwarf32Var struct {
 	Colmun   uint32
 	Type     uint64
 	Location Dwarf32Location
-}
-
-type Dwarf32Location struct {
-	Reg    uint32
-	Offset int32
 }
 
 const (
@@ -1579,8 +1580,17 @@ func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 func ReadFrameInfo(bin []byte) Dwarf32FrameInfo {
 
 	var frameInfo Dwarf32FrameInfo
+	frameInfo.FDEs = make(map[uint64]Dwarf32FDE)
+
 	// .debug_frame
+	// offset-Index Map
+	var ciePointerMap map[uint64]uint32 = make(map[uint64]uint32)
+	var cie Dwarf32CIE
 	var offset uint64 = 0
+
+	var cieIdx uint32 = 0
+	ciePointerMap[offset] = cieIdx
+
 	unitLengthSize := 4
 	// unit_length initial length(4 or 8 bytes)
 	tmp, _ := binutil.FromLeToUInt32(bin[offset:])
@@ -1590,7 +1600,6 @@ func ReadFrameInfo(bin []byte) Dwarf32FrameInfo {
 	var initialLength uint64 = 0
 	var dwarfFormat uint64 = 0
 
-	var cie Dwarf32CIE
 	if tmp < 0xffffff00 {
 		// 32-bit DWARF Format
 		initialLength = uint64(tmp)
@@ -1730,9 +1739,11 @@ func ReadFrameInfo(bin []byte) Dwarf32FrameInfo {
 
 		// CIE Pointer
 		ciePointer, _ := binutil.FromLeToUInt32(bin[offset:])
+		cieIdx := ciePointerMap[uint64(ciePointer)]
 		fde.CIEPointer = ciePointer
+		fde.CIEIdx = cieIdx
 		offset += 4
-		logger.DLog("ciePointer: 0x%X\n", ciePointer)
+		logger.DLog("ciePointer: 0x%X, cieIdx:%d\n", ciePointer, cieIdx)
 
 		// initial_location
 		// TODO: addressSize: 4
@@ -1758,12 +1769,13 @@ func ReadFrameInfo(bin []byte) Dwarf32FrameInfo {
 			insTotal += insSize
 			offset += uint64(insSize)
 		}
-		frameInfo.FDEs = append(frameInfo.FDEs, fde)
+		logger.DLog("InitialLocation: 0x%X\n", fde.InitialLocation)
+		frameInfo.FDEs[uint64(fde.InitialLocation)] = fde
 	}
 	return frameInfo
 }
 
-func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []byte, elfObj elf.ElfObject, offsetLineInfoMap map[uint64]Dwarf32LineInfoHdr) []Dwarf32CuDebugInfo {
+func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf32FrameInfo, debug_info []byte, elfObj elf.ElfObject, offsetLineInfoMap map[uint64]Dwarf32LineInfoHdr) []Dwarf32CuDebugInfo {
 	var dbgInfolen uint64 = uint64(len(debug_info))
 	dbgInfos := []Dwarf32CuDebugInfo{}
 	count := 0
@@ -1802,6 +1814,11 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 		}
 		cuEnd += cuTop
 		offset += 11
+		var hasSibling = false
+		var siblingOffset uint64 = 0
+		var dwarfFuncInfo *Dwarf32FuncInfo = nil
+		var funcArg *Dwarf32Var = nil
+		var localVar *Dwarf32Var = nil
 
 		for offset < cuEnd {
 			entryOffset := offset
@@ -1811,12 +1828,41 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 				continue
 			}
 
+			if hasSibling {
+				if siblingOffset == offset {
+					logger.DLog("found sibling [%X], clear function Info\n", offset)
+
+					if dwarfFuncInfo != nil {
+						if dwarfFuncInfo.Addr != 0 {
+							// skip if addr not set(must be library function)
+							logger.TLog("name:%s, linkageName:%s addr:0x%X\n", dwarfFuncInfo.Name, dwarfFuncInfo.LinkageName, dwarfFuncInfo.Addr)
+							cuDbgInfo.Funcs[dwarfFuncInfo.Addr] = *dwarfFuncInfo
+						} else {
+							// addr not fixed, maybe c++ function delc, add tmpFuncs
+							cppTmpFunc[uint64(entryOffset)] = *dwarfFuncInfo
+						}
+					}
+
+					hasSibling = false
+					siblingOffset = 0
+					dwarfFuncInfo = nil
+					funcArg = nil
+					localVar = nil
+				}
+			} else {
+				logger.DLog("clear function Info\n")
+				dwarfFuncInfo = nil
+				funcArg = nil
+				localVar = nil
+			}
+
 			abbrev := abbrevMap[id]
 			offset += uint64(size)
 
-			var dwarfFuncInfo *Dwarf32FuncInfo = nil
-			var funcArg *Dwarf32Var = nil
-			var localVar *Dwarf32Var = nil
+			if entryOffset == 0x915 {
+				logger.TLog("!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+			}
+
 			if abbrev.Tag == DW_TAG_subprogram {
 				dwarfFuncInfo = &Dwarf32FuncInfo{}
 			}
@@ -1828,13 +1874,13 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 				funcArg = &Dwarf32Var{}
 			}
 
-			if entryOffset == 0x955 {
-				logger.TLog("!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-			}
-
 			for _, attr := range abbrev.Attrs {
 				attrName := AttrNameMap[attr.Attr]
 				logger.DLog("[%6x] %s", entryOffset, attrName)
+				if attr.Attr == DW_AT_sibling {
+					logger.DLog("sibling found !")
+					hasSibling = true
+				}
 				switch attr.Form {
 				case DW_FORM_addr:
 					// TODO addr
@@ -2073,7 +2119,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 							logger.DLog("ref func not found")
 						}
 					} else if attr.Attr == DW_AT_sibling {
-
+						siblingOffset = refval
 					} else if attr.Attr == DW_AT_type {
 						if abbrev.Tag == DW_TAG_formal_parameter {
 							// TODO: TypeはDIEのオフセットになっているので別途解釈が必要
@@ -2272,6 +2318,17 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, debug_info []by
 							i += size
 							logger.TLog("\toperand:%d\n", operand)
 							if abbrev.Tag == DW_TAG_variable {
+								if dwarfFuncInfo != nil {
+									if dwarfFuncInfo.FrameBase == FRAME_TYPE_CFI {
+										fde, _ := frameInfo.FDEs[dwarfFuncInfo.Addr]
+										cie := frameInfo.CIEs[fde.CIEIdx]
+										logger.TLog("CIE Id: %d\n", cie.CIE_id)
+									} else {
+										panic("!!!!")
+									}
+								} else {
+									logger.TLog("DW_TAG_variable found, dwarfFuncInfo is nil\n")
+								}
 								localVar.Location.Offset = int32(operand)
 							}
 							if abbrev.Tag == DW_TAG_formal_parameter {
