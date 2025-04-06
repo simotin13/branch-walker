@@ -34,9 +34,12 @@ const (
 	LinkValueTypeFunc = LinkValueTypeEval + 1
 )
 
+type DirtyRegMap map[uint]struct{}
+
 type RiscVFunc struct {
-	FuncName string
-	Addr     uint64
+	FuncName  string
+	Addr      uint64
+	DirtyMems []RiscVMem
 }
 
 type RiscVOperand struct {
@@ -117,14 +120,6 @@ func (exp *Expression) Eval() {
 type RiscVContext struct {
 	Regs [32]RiscVReg
 	Mem  map[uint64]uint8
-}
-
-func InitializeCtx(ctx *RiscVContext) {
-	for i := 0; i < 32; i++ {
-		regName := capstone.GetRiscVRegName(uint(i))
-		ctx.Regs[i] = RiscVReg{RegNum: uint(i), RegName: regName, HasValue: false}
-	}
-	ctx.Mem = make(map[uint64]uint8)
 }
 
 type CmpCondition struct {
@@ -269,6 +264,7 @@ func main() {
 		os.Exit(-1)
 	}
 
+	funcDirtyRegMap := make(map[uint64]DirtyRegMap)
 	funcSliceMap := make(map[uint64]SliceInfo)
 	funcInfos := targetObj.GetFuncsInfos()
 	var elfMainFuncInfo *elf.ElfFunctionInfo
@@ -308,7 +304,8 @@ func main() {
 			logger.ShowErrorMsg("Failed to disassemble\n")
 			os.Exit(-1)
 		}
-		funcSlice := backwardSlice(insns)
+		funcSlice, dirtyRegs := backwardSlice(insns)
+		funcDirtyRegMap[elfFuncInfo.Addr] = dirtyRegs
 		funcSliceMap[elfFuncInfo.Addr] = funcSlice
 		basicBlk, exist := funcSlice.BasicBlks[elfFuncInfo.Addr]
 		if exist {
@@ -346,7 +343,8 @@ func main() {
 				os.Exit(-1)
 			}
 
-			funcSlice := backwardSlice(insns)
+			funcSlice, dirtyRegsMap := backwardSlice(insns)
+			funcDirtyRegMap[elfMainFuncInfo.Addr] = dirtyRegsMap
 			funcSliceMap[elfMainFuncInfo.Addr] = funcSlice
 
 			basicBlk, exist := funcSlice.BasicBlks[elfMainFuncInfo.Addr]
@@ -383,9 +381,11 @@ func main() {
 	}
 }
 
-func backwardSlice(insns []capstone.Instruction) SliceInfo {
+func backwardSlice(insns []capstone.Instruction) (sliceInfo SliceInfo, dirtyRegs DirtyRegMap) {
 	basicBlks := make(map[uint64]BasicBlock)
 	var curBasickBlk *BasicBlock
+	dirtyRegs = make(map[uint]struct{})
+
 	for _, insn := range insns {
 		le_bytes := reverse(insn.Bytes)
 		logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
@@ -399,6 +399,11 @@ func backwardSlice(insns []capstone.Instruction) SliceInfo {
 			}
 		}
 		curBasickBlk.Insns = append(curBasickBlk.Insns, insn)
+		regs := checkDirtyRegs(&insn)
+		for _, reg := range regs {
+			dirtyRegs[reg] = struct{}{}
+		}
+
 		isBransh, _ := isBranchInsn(&insn)
 		if isBransh {
 			curBasickBlk.BranchInsn = &insn
@@ -516,6 +521,7 @@ func backwardSlice(insns []capstone.Instruction) SliceInfo {
 					}
 				}
 			}
+
 			isFuncCall := isFuncCallInsn(&insn)
 			if isFuncCall {
 				for i, relatedOperand := range relatedOperands {
@@ -538,7 +544,8 @@ func backwardSlice(insns []capstone.Instruction) SliceInfo {
 		basicBlk.RelatedOperands = relatedOperands
 		basicBlks[entryAddr] = basicBlk
 	}
-	return SliceInfo{BasicBlks: basicBlks}
+	sliceInfo = SliceInfo{BasicBlks: basicBlks}
+	return sliceInfo, dirtyRegs
 }
 
 func isMvInsn(insn *capstone.Instruction) (isMv bool) {
@@ -591,6 +598,64 @@ func isFuncCallInsn(insn *capstone.Instruction) (isFuncCall bool) {
 	nm := strings.ToUpper(insn.Mnemonic)
 	_, isFuncCall = fancCallInsnMap[nm]
 	return isFuncCall
+}
+func checkDirtyRegs(insn *capstone.Instruction) (dirtyRegs []uint) {
+	nm := strings.ToUpper(insn.Mnemonic)
+	switch nm {
+	// ALU Insn
+	case "ADD":
+		fallthrough
+	case "SUB":
+	case "SLT":
+	case "SLTU":
+	case "XOR":
+	case "OR":
+	case "AND":
+	// ALU With Immediate Insn
+	case "ADDI":
+	case "SLTI":
+	case "SLTIU":
+	case "XORI":
+	case "ORI":
+	case "ANDI":
+	// Shift Insn
+	case "SLL":
+	case "SRL":
+	case "SRA":
+	case "SLLI":
+	case "SRLI":
+	case "SRAI":
+	// Load mem → reg
+	case "LB":
+	case "LH":
+	case "LW":
+	case "LBU":
+	case "LHU":
+	case "LD":
+	case "JAL":
+	case "JALR":
+	case "AUIPC":
+	case "LUI":
+	// CSR Insn
+	case "CSRRW":
+	case "CSRRS":
+	case "CSRRC":
+	case "CSRRWI":
+	case "CSRRSI":
+	case "CSRRCI":
+	// Mul,Div Insn
+	case "MUL":
+	case "MULH":
+	case "MULSU":
+	case "MULHU":
+	case "DIV":
+	case "DIVU":
+	case "REM":
+	case "REMU":
+		reg := insn.Riscv.Operands[0]
+		dirtyRegs = append(dirtyRegs, reg.Reg)
+	}
+	return dirtyRegs
 }
 
 func isBranchInsn(insn *capstone.Instruction) (isBranch bool, isConditionalBranch bool) {
