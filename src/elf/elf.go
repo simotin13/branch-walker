@@ -435,6 +435,7 @@ type ElfObject interface {
 	GetSectionBinByName(name string) []byte
 	HasSection(name string) bool
 	GetFuncIdxByAddr(addr uint64) int
+	GetFuncByAddr(addr uint64) (bool, *ElfFunctionInfo)
 	GetFuncsInfos() []ElfFunctionInfo
 	ReadDynamic(dynamic []byte) []string
 	GetPath() string
@@ -641,6 +642,14 @@ func (elfObj *Elf32Object) GetFuncIdxByAddr(addr uint64) int {
 		return -1
 	}
 	return funcIdx
+}
+
+func (elfObj *Elf32Object) GetFuncByAddr(addr uint64) (bool, *ElfFunctionInfo) {
+	funcIdx, exist := elfObj.AddrFuncIdxMap[addr]
+	if !exist {
+		return false, nil
+	}
+	return true, &elfObj.FuncsInfos[funcIdx]
 }
 
 func (elfObj Elf32Object) GetFuncsInfos() []ElfFunctionInfo {
@@ -1312,6 +1321,14 @@ func (elfObj *Elf64Object) GetFuncIdxByAddr(addr uint64) int {
 		return -1
 	}
 	return funcIdx
+}
+
+func (elfObj *Elf64Object) GetFuncByAddr(addr uint64) (bool, *ElfFunctionInfo) {
+	funcIdx, exist := elfObj.AddrFuncIdxMap[addr]
+	if !exist {
+		return false, nil
+	}
+	return true, &elfObj.FuncsInfos[funcIdx]
 }
 
 func (elfObj Elf64Object) GetExecPhOffset() uint64 {

@@ -27,6 +27,7 @@ const (
 )
 
 const (
+	LinkValueTypeNone = 0
 	LinkValueTypeReg  = capstone.RISCV_OP_REG
 	LinkValueTypeImm  = capstone.RISCV_OP_IMM
 	LinkValueTypeMem  = capstone.RISCV_OP_MEM
@@ -34,12 +35,12 @@ const (
 	LinkValueTypeFunc = LinkValueTypeEval + 1
 )
 
+type DirtyMemMap map[uint64]struct{}
 type DirtyRegMap map[uint]struct{}
 
 type RiscVFunc struct {
-	FuncName  string
-	Addr      uint64
-	DirtyMems []RiscVMem
+	FuncName string
+	Addr     uint64
 }
 
 type RiscVOperand struct {
@@ -69,7 +70,6 @@ type RiscVReg struct {
 	LinkValueType int
 	LinkValue     int64
 	LinkMem       *RiscVMem
-	LinkReg       *RiscVReg
 	LinkFunc      *RiscVFunc
 	LinkExpress   *Expression
 }
@@ -139,8 +139,12 @@ type BranchInsnInfo struct {
 	IsBranch            bool
 	isConditionalBranch bool
 }
-type SliceInfo struct {
+type FuncSlice struct {
+	Name      string
+	Addr      uint64
 	BasicBlks map[uint64]BasicBlock
+	DirtyRegs DirtyRegMap
+	DirtyMems DirtyMemMap
 }
 
 var mvInsnMap = map[string]struct{}{
@@ -264,8 +268,7 @@ func main() {
 		os.Exit(-1)
 	}
 
-	funcDirtyRegMap := make(map[uint64]DirtyRegMap)
-	funcSliceMap := make(map[uint64]SliceInfo)
+	funcSliceMap := make(map[uint64]FuncSlice)
 	funcInfos := targetObj.GetFuncsInfos()
 	var elfMainFuncInfo *elf.ElfFunctionInfo
 	for i, elfFuncInfo := range funcInfos {
@@ -304,8 +307,7 @@ func main() {
 			logger.ShowErrorMsg("Failed to disassemble\n")
 			os.Exit(-1)
 		}
-		funcSlice, dirtyRegs := backwardSlice(insns)
-		funcDirtyRegMap[elfFuncInfo.Addr] = dirtyRegs
+		funcSlice := backwardSlice(insns, &targetObj)
 		funcSliceMap[elfFuncInfo.Addr] = funcSlice
 		basicBlk, exist := funcSlice.BasicBlks[elfFuncInfo.Addr]
 		if exist {
@@ -343,10 +345,8 @@ func main() {
 				os.Exit(-1)
 			}
 
-			funcSlice, dirtyRegsMap := backwardSlice(insns)
-			funcDirtyRegMap[elfMainFuncInfo.Addr] = dirtyRegsMap
+			funcSlice := backwardSlice(insns, &targetObj)
 			funcSliceMap[elfMainFuncInfo.Addr] = funcSlice
-
 			basicBlk, exist := funcSlice.BasicBlks[elfMainFuncInfo.Addr]
 			if exist {
 				for _, relatedOperand := range basicBlk.RelatedOperands {
@@ -381,10 +381,10 @@ func main() {
 	}
 }
 
-func backwardSlice(insns []capstone.Instruction) (sliceInfo SliceInfo, dirtyRegs DirtyRegMap) {
+func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (funcSlice FuncSlice) {
 	basicBlks := make(map[uint64]BasicBlock)
 	var curBasickBlk *BasicBlock
-	dirtyRegs = make(map[uint]struct{})
+	dirtyRegs := make(map[uint]struct{})
 
 	for _, insn := range insns {
 		le_bytes := reverse(insn.Bytes)
@@ -421,11 +421,11 @@ func backwardSlice(insns []capstone.Instruction) (sliceInfo SliceInfo, dirtyRegs
 	for entryAddr, basicBlk := range basicBlks {
 		relatedOperands := make([]RiscVReg, 0)
 		//logger.ShowAppMsg("**** entryAddr: 0x%X\n", entryAddr)
-		revInsns := capstone.ReverseInsns(insns)
+		revInsns := capstone.ReverseInsns(basicBlk.Insns)
 		foundRetInsn := false
 		for _, insn := range revInsns {
-			//le_bytes := reverse(insn.Bytes)
-			//logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+			le_bytes := reverse(insn.Bytes)
+			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 			isRet := isRetInsn(&insn)
 			if isRet {
 				logger.ShowAppMsg("Ret insn found\n")
@@ -508,15 +508,20 @@ func backwardSlice(insns []capstone.Instruction) (sliceInfo SliceInfo, dirtyRegs
 					if !relatedOperand.HasValue {
 						continue
 					}
+
+					// TODO: ここで依存するレジスタの内容を書き換えて問題ないか？
 					if relatedOperand.LinkValueType == LinkValueTypeMem {
 						// Update LinkMem to Reg
 						isSameBase := relatedOperand.LinkMem.RegNum == op1.Mem.Base
 						isSameOffset := uint(relatedOperand.LinkMem.Offset) == uint(op1.Mem.Disp)
 						if isSameBase && isSameOffset {
-							relatedOperands[i].LinkValueType = LinkValueTypeReg
-							relatedOperands[i].LinkMem = nil
 							regName := capstone.GetRiscVRegName(op0.Reg)
-							relatedOperands[i].LinkReg = &RiscVReg{RegNum: op0.Reg, RegName: regName, HasValue: false}
+							logger.DLog("related reg:[%s] updated to reg:[%s]", relatedOperands[i].RegName, regName)
+							relatedOperands[i].HasValue = false
+							relatedOperands[i].LinkValueType = LinkValueTypeNone
+							relatedOperands[i].LinkMem = nil
+							relatedOperands[i].RegName = regName
+							relatedOperands[i].RegNum = op0.Reg
 						}
 					}
 				}
@@ -529,23 +534,27 @@ func backwardSlice(insns []capstone.Instruction) (sliceInfo SliceInfo, dirtyRegs
 						continue
 					}
 
-					// TODO not only a0, need to check memory for output of function...
-					if relatedOperand.LinkValueType != LinkValueTypeReg {
-						continue
-					}
+					// TODO: 呼び出している関数が破壊するレジスタを依存先として持っているか？をチェックすべき
 					// update LinkReg → Func
 					//getFuncInfo
-					relatedOperands[i].LinkReg = nil
+					//relatedOperands[i].LinkReg = nil
+					op := insn.Riscv.Operands[0]
+					jmpAddr := uint64(insn.Address) + uint64(op.Imm)
+					funcName := ""
+					exist, f := (*targetObj).GetFuncByAddr(jmpAddr)
+					if exist {
+						funcName = f.Name
+					}
 					relatedOperands[i].LinkValueType = LinkValueTypeFunc
-					relatedOperands[i].LinkFunc = &RiscVFunc{FuncName: "", Addr: 0}
+					relatedOperands[i].LinkFunc = &RiscVFunc{FuncName: funcName, Addr: jmpAddr}
 				}
 			}
 		}
 		basicBlk.RelatedOperands = relatedOperands
 		basicBlks[entryAddr] = basicBlk
 	}
-	sliceInfo = SliceInfo{BasicBlks: basicBlks}
-	return sliceInfo, dirtyRegs
+	funcSlice = FuncSlice{BasicBlks: basicBlks, DirtyRegs: dirtyRegs}
+	return funcSlice
 }
 
 func isMvInsn(insn *capstone.Instruction) (isMv bool) {
