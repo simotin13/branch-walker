@@ -1,16 +1,21 @@
 #include <stdio.h>
-int add(int a, int b) {
-    return a + b;
+int is_even(int num) {
+    int even = 1;
+    if (num % 2) {
+    	even = 0;
+    }
+    return even;
 }
 
 int main() {
-    int sum = 0;
-    sum = add(1, 2);
-    if (sum == 10)
+    int ret;
+    int num = 3;
+    ret = is_even(num);
+    if (ret)
     {
-        printf("sum is 10\n");
+        printf("num:[%d] is even\n");
     } else {
-        printf("sum is not 10\n");
+        printf("num:[%d] is odd\n");
     }
     return 0;
 }
