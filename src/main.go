@@ -71,6 +71,13 @@ type RiscVReg struct {
 	LinkExpress   *Expression
 }
 
+type RiscVArg struct {
+	RegNum        uint
+	RegName       string
+	FrameOffset   int64
+	ArgType	      int
+}
+
 // TODO コンテキストを用意して計算すべきか？
 func (reg *RiscVReg) Eval() {
 	for {
@@ -139,6 +146,7 @@ type BranchInsnInfo struct {
 type FuncSlice struct {
 	Name      string
 	Addr      uint64
+	Args      []RiscVArg
 	BasicBlks map[uint64]BasicBlock
 }
 
