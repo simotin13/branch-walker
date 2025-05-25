@@ -1814,8 +1814,9 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 		}
 		cuEnd += cuTop
 		offset += 11
-		var hasSibling = false
-		var siblingOffset uint64 = 0
+		//var hasSibling = false
+		//var siblingOffset uint64 = 0
+		//var isChildren = false
 		var dwarfFuncInfo *Dwarf32FuncInfo = nil
 		var funcArg *Dwarf32Var = nil
 		var localVar *Dwarf32Var = nil
@@ -1824,41 +1825,56 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 			entryOffset := offset
 			id, size := ReaduLEB128(debug_info[offset:])
 			if id == 0 {
+				//isChildren = false
+				if dwarfFuncInfo != nil {
+					if dwarfFuncInfo.Addr != 0 {
+						// skip if addr not set(must be library function)
+						logger.TLog("name:%s, linkageName:%s addr:0x%X\n", dwarfFuncInfo.Name, dwarfFuncInfo.LinkageName, dwarfFuncInfo.Addr)
+						cuDbgInfo.Funcs[dwarfFuncInfo.Addr] = *dwarfFuncInfo
+					} else {
+						// addr not fixed, maybe c++ function delc, add tmpFuncs
+						cppTmpFunc[uint64(entryOffset)] = *dwarfFuncInfo
+					}
+				}
+
+				//hasSibling = false
+				//siblingOffset = 0
+				dwarfFuncInfo = nil
+				funcArg = nil
+				localVar = nil
+
 				offset++
 				continue
 			}
 
-			if hasSibling {
-				if siblingOffset == offset {
-					logger.DLog("found sibling [%X], clear function Info\n", offset)
+			/*
+				if hasSibling {
+					if siblingOffset == offset {
+						logger.DLog("found sibling [%X], clear function Info\n", offset)
 
-					if dwarfFuncInfo != nil {
-						if dwarfFuncInfo.Addr != 0 {
-							// skip if addr not set(must be library function)
-							logger.TLog("name:%s, linkageName:%s addr:0x%X\n", dwarfFuncInfo.Name, dwarfFuncInfo.LinkageName, dwarfFuncInfo.Addr)
-							cuDbgInfo.Funcs[dwarfFuncInfo.Addr] = *dwarfFuncInfo
-						} else {
-							// addr not fixed, maybe c++ function delc, add tmpFuncs
-							cppTmpFunc[uint64(entryOffset)] = *dwarfFuncInfo
+						if dwarfFuncInfo != nil {
+							if dwarfFuncInfo.Addr != 0 {
+								// skip if addr not set(must be library function)
+								logger.TLog("name:%s, linkageName:%s addr:0x%X\n", dwarfFuncInfo.Name, dwarfFuncInfo.LinkageName, dwarfFuncInfo.Addr)
+								cuDbgInfo.Funcs[dwarfFuncInfo.Addr] = *dwarfFuncInfo
+							} else {
+								// addr not fixed, maybe c++ function delc, add tmpFuncs
+								cppTmpFunc[uint64(entryOffset)] = *dwarfFuncInfo
+							}
 						}
+
+						hasSibling = false
+						siblingOffset = 0
+						dwarfFuncInfo = nil
+						funcArg = nil
+						localVar = nil
 					}
-
-					hasSibling = false
-					siblingOffset = 0
-					dwarfFuncInfo = nil
-					funcArg = nil
-					localVar = nil
 				}
-			} else {
-				logger.DLog("clear function Info\n")
-				dwarfFuncInfo = nil
-				funcArg = nil
-				localVar = nil
-			}
+			*/
 
-			abbrev := abbrevMap[id]
 			offset += uint64(size)
 
+			abbrev := abbrevMap[id]
 			if abbrev.Tag == DW_TAG_subprogram {
 				dwarfFuncInfo = &Dwarf32FuncInfo{}
 			}
@@ -1875,7 +1891,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 				//logger.DLog("[%6x] %s", entryOffset, attrName)
 				if attr.Attr == DW_AT_sibling {
 					logger.DLog("sibling found !")
-					hasSibling = true
+					//hasSibling = true
 				}
 				switch attr.Form {
 				case DW_FORM_addr:
@@ -1946,6 +1962,11 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 							dwarfFuncInfo.Name = str
 						} else {
 							panic("not name!")
+						}
+					}
+					if abbrev.Tag == DW_TAG_variable {
+						if attr.Attr == DW_AT_name {
+							localVar.Name = str
 						}
 					}
 				case DW_FORM_data1:
@@ -2118,7 +2139,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 							logger.DLog("ref func not found")
 						}
 					} else if attr.Attr == DW_AT_sibling {
-						siblingOffset = refval
+						//siblingOffset = refval
 					} else if attr.Attr == DW_AT_type {
 						if abbrev.Tag == DW_TAG_formal_parameter {
 							// TODO: TypeはDIEのオフセットになっているので別途解釈が必要
@@ -2634,6 +2655,10 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 					// skip if addr not set(must be library function)
 					logger.TLog("name:%s, linkageName:%s addr:0x%X\n", dwarfFuncInfo.Name, dwarfFuncInfo.LinkageName, dwarfFuncInfo.Addr)
 					cuDbgInfo.Funcs[dwarfFuncInfo.Addr] = *dwarfFuncInfo
+
+					if dwarfFuncInfo.Name == "is_even" {
+						logger.DLog("***************** is_even *********\n")
+					}
 				} else {
 					// addr not fixed, maybe c++ function delc, add tmpFuncs
 					cppTmpFunc[uint64(entryOffset)] = *dwarfFuncInfo

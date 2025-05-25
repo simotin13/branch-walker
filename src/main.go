@@ -2,7 +2,9 @@ package main
 
 import (
 	capstone "branch-walker/capstone"
-//	dwarf "branch-walker/dwarf"
+	"branch-walker/dwarf"
+
+	//	dwarf "branch-walker/dwarf"
 	elf "branch-walker/elf"
 	logger "branch-walker/logger"
 	"fmt"
@@ -72,10 +74,10 @@ type RiscVReg struct {
 }
 
 type RiscVArg struct {
-	RegNum        uint
-	RegName       string
-	FrameOffset   int64
-	ArgType	      int
+	RegNum      uint
+	RegName     string
+	FrameOffset int64
+	ArgType     int
 }
 
 // TODO コンテキストを用意して計算すべきか？
@@ -133,7 +135,7 @@ type CmpCondition struct {
 type BasicBlock struct {
 	EntryAddr       uint64
 	From            []uint64
-	NextAddrs      []uint64
+	NextAddrs       []uint64
 	BranchInsn      *capstone.Instruction
 	Insns           []capstone.Instruction
 	RelatedOperands []RiscVReg
@@ -158,8 +160,8 @@ var fancCallInsnMap = map[string]struct{}{
 }
 
 var branchInsnMap = map[string]BranchInsnInfo{
-	"BNE": {IsBranch: true, IsConditionalBranch: true},
-	"BEQZ": {IsBranch: true, IsConditionalBranch: true},
+	"BNE":    {IsBranch: true, IsConditionalBranch: true},
+	"BEQZ":   {IsBranch: true, IsConditionalBranch: true},
 	"C.BEQZ": {IsBranch: true, IsConditionalBranch: true},
 }
 
@@ -237,29 +239,29 @@ func main() {
 		logger.ShowErrorMsg(".debug_aranges section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	//debug_aranges := targetObj.GetSectionBinByName(".debug_aranges")
-	//aranges := dwarf.ReadAranges(debug_aranges)
+	debug_aranges := targetObj.GetSectionBinByName(".debug_aranges")
+	aranges := dwarf.ReadAranges(debug_aranges)
 
 	if !targetObj.HasSection(".debug_line") {
 		logger.ShowErrorMsg(".debug_line section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	//debug_line := targetObj.GetSectionBinByName(".debug_line")
-	//offsetLineInfoMap := dwarf.ReadLineInfo(debug_line, targetObj)
+	debug_line := targetObj.GetSectionBinByName(".debug_line")
+	offsetLineInfoMap := dwarf.ReadLineInfo(debug_line, targetObj)
 
 	if !targetObj.HasSection(".debug_frame") {
 		logger.ShowErrorMsg(".debug_frame section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	//debug_frame := targetObj.GetSectionBinByName(".debug_frame")
-	//frameInfo := dwarf.ReadFrameInfo(debug_frame)
+	debug_frame := targetObj.GetSectionBinByName(".debug_frame")
+	frameInfo := dwarf.ReadFrameInfo(debug_frame)
 
 	if !targetObj.HasSection(".debug_info") {
 		logger.ShowErrorMsg(".debug_info section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	//debug_info := targetObj.GetSectionBinByName(".debug_info")
-	//dbgInfos := dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
+	debug_info := targetObj.GetSectionBinByName(".debug_info")
+	dbgInfos := dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
 
 	cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCVC)
 	if err != nil {
@@ -281,12 +283,12 @@ func main() {
 			continue
 		}
 		/*
-		if elfFuncInfo.Name == "main" {
-			//logger.DLog("main function found\n")
-			elfMainFuncInfo = &funcInfos[i]
-			continue
-		}
-			*/
+			if elfFuncInfo.Name == "main" {
+				//logger.DLog("main function found\n")
+				elfMainFuncInfo = &funcInfos[i]
+				continue
+			}
+		*/
 		if elfFuncInfo.Name != "is_even" {
 			continue
 		}
@@ -329,53 +331,9 @@ func main() {
 		} else {
 			logger.DLog("%s entry block not found \n", elfFuncInfo.Name)
 		}
-	}
-
-	// メイン関数の解析
-	/*
-	if elfMainFuncInfo != nil {
-		loadAddr, err := targetObj.GetSectionLoadAddrByName(elfMainFuncInfo.SecName)
-		if err != nil {
-			logger.ShowErrorMsg("Failed to disassemble\n")
-			os.Exit(-1)
-		}
-
-		fStart := elfMainFuncInfo.Addr - loadAddr
-		fEnd := fStart + elfMainFuncInfo.Size
-		logger.DLog("Disassemble Name:%s, Addr:0x%X, Offset:0x%X, Size:%d, SecName:%s, LoadAddr:0x%X\n", elfMainFuncInfo.Name, elfMainFuncInfo.Addr, fStart, elfMainFuncInfo.Size, elfMainFuncInfo.SecName, loadAddr)
-		secBin := targetObj.GetSectionBinByName(elfMainFuncInfo.SecName)
-		if secBin == nil {
-			logger.ShowErrorMsg("Cannot find .text section\n")
-			os.Exit(-1)
-		}
-		if 0 < elfMainFuncInfo.Size {
-			fBin := secBin[fStart:fEnd]
-			insns, err := cs.Disasm(fBin, elfMainFuncInfo.Addr, 0)
-			if err != nil {
-				logger.ShowErrorMsg("Failed to disassemble\n")
-				os.Exit(-1)
-			}
-
-			funcSlice := backwardSlice(insns, &targetObj)
-			funcSliceMap[elfMainFuncInfo.Addr] = funcSlice
-			basicBlk, exist := funcSlice.BasicBlks[elfMainFuncInfo.Addr]
-			if exist {
-				num := len(basicBlk.RelatedOperands)
-				logger.ShowErrorMsg("************ dump RelatedOperands:[%d] *******\n", num)
-				for _, relatedOperand := range basicBlk.RelatedOperands {
-					logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
-					if relatedOperand.HasValue {
-						logger.ShowErrorMsg("LinkValue Type:[%d]\n", relatedOperand.LinkValueType)
-					} else {
-						logger.ShowErrorMsg("\n")
-					}
-				}
-			}
-		}
-
 		// 引数・ローカル変数の情報を取得
 		for _, dbgInfo := range dbgInfos {
-			dbgFunc, exist := dbgInfo.Funcs[elfMainFuncInfo.Addr]
+			dbgFunc, exist := dbgInfo.Funcs[elfFuncInfo.Addr]
 			if !exist {
 				continue
 			}
@@ -390,9 +348,53 @@ func main() {
 			for _, arg := range dbgFunc.LocalVars {
 				logger.DLog("Name:%s, Location(Reg:%d, Offset:%d)\n", arg.Name, arg.Location.Reg, arg.Location.Offset)
 			}
+			break
 		}
 	}
-		*/
+
+	// メイン関数の解析
+	/*
+		if elfMainFuncInfo != nil {
+			loadAddr, err := targetObj.GetSectionLoadAddrByName(elfMainFuncInfo.SecName)
+			if err != nil {
+				logger.ShowErrorMsg("Failed to disassemble\n")
+				os.Exit(-1)
+			}
+
+			fStart := elfMainFuncInfo.Addr - loadAddr
+			fEnd := fStart + elfMainFuncInfo.Size
+			logger.DLog("Disassemble Name:%s, Addr:0x%X, Offset:0x%X, Size:%d, SecName:%s, LoadAddr:0x%X\n", elfMainFuncInfo.Name, elfMainFuncInfo.Addr, fStart, elfMainFuncInfo.Size, elfMainFuncInfo.SecName, loadAddr)
+			secBin := targetObj.GetSectionBinByName(elfMainFuncInfo.SecName)
+			if secBin == nil {
+				logger.ShowErrorMsg("Cannot find .text section\n")
+				os.Exit(-1)
+			}
+			if 0 < elfMainFuncInfo.Size {
+				fBin := secBin[fStart:fEnd]
+				insns, err := cs.Disasm(fBin, elfMainFuncInfo.Addr, 0)
+				if err != nil {
+					logger.ShowErrorMsg("Failed to disassemble\n")
+					os.Exit(-1)
+				}
+
+				funcSlice := backwardSlice(insns, &targetObj)
+				funcSliceMap[elfMainFuncInfo.Addr] = funcSlice
+				basicBlk, exist := funcSlice.BasicBlks[elfMainFuncInfo.Addr]
+				if exist {
+					num := len(basicBlk.RelatedOperands)
+					logger.ShowErrorMsg("************ dump RelatedOperands:[%d] *******\n", num)
+					for _, relatedOperand := range basicBlk.RelatedOperands {
+						logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
+						if relatedOperand.HasValue {
+							logger.ShowErrorMsg("LinkValue Type:[%d]\n", relatedOperand.LinkValueType)
+						} else {
+							logger.ShowErrorMsg("\n")
+						}
+					}
+				}
+			}
+		}
+	*/
 }
 
 func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (funcSlice FuncSlice) {
@@ -407,7 +409,7 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (func
 			curBasickBlk = &BasicBlock{
 				EntryAddr:  uint64(insn.Address),
 				From:       []uint64{},
-				NextAddrs: []uint64{},
+				NextAddrs:  []uint64{},
 				BranchInsn: nil,
 				Insns:      []capstone.Instruction{},
 			}
