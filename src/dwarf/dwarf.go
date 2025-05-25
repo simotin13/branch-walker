@@ -1872,7 +1872,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 
 			for _, attr := range abbrev.Attrs {
 				attrName := AttrNameMap[attr.Attr]
-				logger.DLog("[%6x] %s", entryOffset, attrName)
+				//logger.DLog("[%6x] %s", entryOffset, attrName)
 				if attr.Attr == DW_AT_sibling {
 					logger.DLog("sibling found !")
 					hasSibling = true
@@ -3309,7 +3309,7 @@ func ReadAbbrevTbl(bytes []byte) []Abbrev {
 			}
 
 			attr := AbbrevAttr{Attr: attrCode, Form: formCode, Const: Const}
-			logger.DLog("attr:%s", AttrNameMap[attr.Attr])
+			//logger.DLog("attr:%s", AttrNameMap[attr.Attr])
 
 			abbrev.Attrs = append(abbrev.Attrs, attr)
 		}

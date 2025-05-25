@@ -2,7 +2,7 @@ package main
 
 import (
 	capstone "branch-walker/capstone"
-	dwarf "branch-walker/dwarf"
+//	dwarf "branch-walker/dwarf"
 	elf "branch-walker/elf"
 	logger "branch-walker/logger"
 	"fmt"
@@ -34,9 +34,6 @@ const (
 	LinkValueTypeEval = 0x10
 	LinkValueTypeFunc = LinkValueTypeEval + 1
 )
-
-type DirtyMemMap map[uint64]struct{}
-type DirtyRegMap map[uint]struct{}
 
 type RiscVFunc struct {
 	FuncName string
@@ -129,7 +126,7 @@ type CmpCondition struct {
 type BasicBlock struct {
 	EntryAddr       uint64
 	From            []uint64
-	NextBlocks      []uint64
+	NextAddrs      []uint64
 	BranchInsn      *capstone.Instruction
 	Insns           []capstone.Instruction
 	RelatedOperands []RiscVReg
@@ -137,14 +134,12 @@ type BasicBlock struct {
 
 type BranchInsnInfo struct {
 	IsBranch            bool
-	isConditionalBranch bool
+	IsConditionalBranch bool
 }
 type FuncSlice struct {
 	Name      string
 	Addr      uint64
 	BasicBlks map[uint64]BasicBlock
-	DirtyRegs DirtyRegMap
-	DirtyMems DirtyMemMap
 }
 
 var mvInsnMap = map[string]struct{}{
@@ -155,7 +150,9 @@ var fancCallInsnMap = map[string]struct{}{
 }
 
 var branchInsnMap = map[string]BranchInsnInfo{
-	"BNE": {IsBranch: true, isConditionalBranch: true},
+	"BNE": {IsBranch: true, IsConditionalBranch: true},
+	"BEQZ": {IsBranch: true, IsConditionalBranch: true},
+	"C.BEQZ": {IsBranch: true, IsConditionalBranch: true},
 }
 
 var loadImmInsnMap = map[string]struct{}{
@@ -232,29 +229,29 @@ func main() {
 		logger.ShowErrorMsg(".debug_aranges section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	debug_aranges := targetObj.GetSectionBinByName(".debug_aranges")
-	aranges := dwarf.ReadAranges(debug_aranges)
+	//debug_aranges := targetObj.GetSectionBinByName(".debug_aranges")
+	//aranges := dwarf.ReadAranges(debug_aranges)
 
 	if !targetObj.HasSection(".debug_line") {
 		logger.ShowErrorMsg(".debug_line section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	debug_line := targetObj.GetSectionBinByName(".debug_line")
-	offsetLineInfoMap := dwarf.ReadLineInfo(debug_line, targetObj)
+	//debug_line := targetObj.GetSectionBinByName(".debug_line")
+	//offsetLineInfoMap := dwarf.ReadLineInfo(debug_line, targetObj)
 
 	if !targetObj.HasSection(".debug_frame") {
 		logger.ShowErrorMsg(".debug_frame section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	debug_frame := targetObj.GetSectionBinByName(".debug_frame")
-	frameInfo := dwarf.ReadFrameInfo(debug_frame)
+	//debug_frame := targetObj.GetSectionBinByName(".debug_frame")
+	//frameInfo := dwarf.ReadFrameInfo(debug_frame)
 
 	if !targetObj.HasSection(".debug_info") {
 		logger.ShowErrorMsg(".debug_info section not found. You need to set -g option for build.\n")
 		os.Exit(-1)
 	}
-	debug_info := targetObj.GetSectionBinByName(".debug_info")
-	dbgInfos := dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
+	//debug_info := targetObj.GetSectionBinByName(".debug_info")
+	//dbgInfos := dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
 
 	cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCVC)
 	if err != nil {
@@ -270,17 +267,19 @@ func main() {
 
 	funcSliceMap := make(map[uint64]FuncSlice)
 	funcInfos := targetObj.GetFuncsInfos()
-	var elfMainFuncInfo *elf.ElfFunctionInfo
-	for i, elfFuncInfo := range funcInfos {
+	//var elfMainFuncInfo *elf.ElfFunctionInfo
+	for _, elfFuncInfo := range funcInfos {
 		if strings.HasPrefix(elfFuncInfo.Name, "__") {
 			continue
 		}
+		/*
 		if elfFuncInfo.Name == "main" {
-			logger.DLog("main function found\n")
+			//logger.DLog("main function found\n")
 			elfMainFuncInfo = &funcInfos[i]
 			continue
 		}
-		if elfFuncInfo.Name != "add" {
+			*/
+		if elfFuncInfo.Name != "is_even" {
 			continue
 		}
 		loadAddr, err := targetObj.GetSectionLoadAddrByName(elfFuncInfo.SecName)
@@ -319,9 +318,13 @@ func main() {
 					logger.ShowErrorMsg("\n")
 				}
 			}
+		} else {
+			logger.DLog("%s entry block not found \n", elfFuncInfo.Name)
 		}
 	}
 
+	// メイン関数の解析
+	/*
 	if elfMainFuncInfo != nil {
 		loadAddr, err := targetObj.GetSectionLoadAddrByName(elfMainFuncInfo.SecName)
 		if err != nil {
@@ -349,6 +352,8 @@ func main() {
 			funcSliceMap[elfMainFuncInfo.Addr] = funcSlice
 			basicBlk, exist := funcSlice.BasicBlks[elfMainFuncInfo.Addr]
 			if exist {
+				num := len(basicBlk.RelatedOperands)
+				logger.ShowErrorMsg("************ dump RelatedOperands:[%d] *******\n", num)
 				for _, relatedOperand := range basicBlk.RelatedOperands {
 					logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
 					if relatedOperand.HasValue {
@@ -358,9 +363,9 @@ func main() {
 					}
 				}
 			}
-
 		}
 
+		// 引数・ローカル変数の情報を取得
 		for _, dbgInfo := range dbgInfos {
 			dbgFunc, exist := dbgInfo.Funcs[elfMainFuncInfo.Addr]
 			if !exist {
@@ -379,36 +384,35 @@ func main() {
 			}
 		}
 	}
+		*/
 }
 
 func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (funcSlice FuncSlice) {
 	basicBlks := make(map[uint64]BasicBlock)
 	var curBasickBlk *BasicBlock
-	dirtyRegs := make(map[uint]struct{})
 
+	// 基本ブロックの切り出し
 	for _, insn := range insns {
-		le_bytes := reverse(insn.Bytes)
-		logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+		// le_bytes := reverse(insn.Bytes)
+		//logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 		if curBasickBlk == nil {
 			curBasickBlk = &BasicBlock{
 				EntryAddr:  uint64(insn.Address),
 				From:       []uint64{},
-				NextBlocks: []uint64{},
+				NextAddrs: []uint64{},
 				BranchInsn: nil,
 				Insns:      []capstone.Instruction{},
 			}
 		}
 		curBasickBlk.Insns = append(curBasickBlk.Insns, insn)
-		regs := checkDirtyRegs(&insn)
-		for _, reg := range regs {
-			dirtyRegs[reg] = struct{}{}
-		}
 
+		//le_bytes := reverse(insn.Bytes)
+		//logger.ShowAppMsg("**** branch found, 0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 		isBransh, _ := isBranchInsn(&insn)
 		if isBransh {
 			curBasickBlk.BranchInsn = &insn
 			jmpAddrs := getJmpAddrs(&insn)
-			curBasickBlk.NextBlocks = append(curBasickBlk.NextBlocks, jmpAddrs...)
+			curBasickBlk.NextAddrs = append(curBasickBlk.NextAddrs, jmpAddrs...)
 			basicBlks[curBasickBlk.EntryAddr] = *curBasickBlk
 			curBasickBlk = nil
 		}
@@ -418,35 +422,19 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (func
 		curBasickBlk = nil
 	}
 
+	// 後ろ向きスライシング
 	for entryAddr, basicBlk := range basicBlks {
 		relatedOperands := make([]RiscVReg, 0)
 		//logger.ShowAppMsg("**** entryAddr: 0x%X\n", entryAddr)
 		revInsns := capstone.ReverseInsns(basicBlk.Insns)
-		foundRetInsn := false
 		for _, insn := range revInsns {
 			le_bytes := reverse(insn.Bytes)
-			logger.ShowAppMsg("0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
-			isRet := isRetInsn(&insn)
-			if isRet {
-				logger.ShowAppMsg("Ret insn found\n")
-				foundRetInsn = true
-			}
-			if foundRetInsn {
-				// check return value
-			}
 
 			isBransh, _ := isBranchInsn(&insn)
 			if isBransh {
-				operand := insn.Riscv.Operands[0]
-				reg0Num := operand.Reg
-				reg0Name := capstone.GetRiscVRegName(operand.Reg)
-
-				operand = insn.Riscv.Operands[1]
-				reg1Num := operand.Reg
-				reg1Name := capstone.GetRiscVRegName(operand.Reg)
-				logger.ShowAppMsg("reg0:%s[%d], reg1:%s[%d]\n", reg0Name, reg0Num, reg1Name, reg1Num)
-				relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg0Num, RegName: reg0Name, HasValue: false})
-				relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg1Num, RegName: reg1Name, HasValue: false})
+				logger.DLog("Branch insn found, 0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+				oprnds := getRelatedOperands(&insn)
+				relatedOperands = append(relatedOperands, oprnds...)
 				continue
 			}
 			isLoadImm := isLoadImmInsn(&insn)
@@ -455,10 +443,11 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (func
 				imm := insn.Riscv.Operands[1]
 				for i, relatedOperand := range relatedOperands {
 					if relatedOperand.RegNum == reg.Reg {
+						logger.DLog("Update relatedOperand by Load Imm, 0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
+
 						relatedOperands[i].HasValue = true
 						relatedOperands[i].LinkValueType = LinkValueTypeImm // capstone.RISCV_OP_IMM
 						relatedOperands[i].LinkValue = imm.Imm
-						//logger.ShowAppMsg("LoadImm Related reg found: [%s][%d], Value:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum, imm.Imm)
 						break
 					}
 					// update Link Value
@@ -487,15 +476,18 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (func
 			isLoadMem := isLoadMemInsn(&insn)
 			if isLoadMem {
 				for i, relatedOperand := range relatedOperands {
-					//logger.ShowAppMsg("relatedOperand [%d],[%s]\n", i, relatedOperand.RegName)
 					reg := insn.Riscv.Operands[0]
 					mem := insn.Riscv.Operands[1]
 					if relatedOperand.RegNum == reg.Reg {
+						linkReg := RiscVMem{RegNum: mem.Mem.Base, Offset: mem.Mem.Disp, Value: 0, HasValue: false}
+						regName := capstone.GetRiscVRegName(mem.Mem.Base)
+						logger.ShowAppMsg("Load Related Reg found: [%s][%d], LinkMem:[%s][%d]\n", relatedOperand.RegName, relatedOperand.RegNum, regName, mem.Mem.Base)
+
+						// 参照しているレジスタは使いまわしされる可能性があるので更新しておく
+						relatedOperands[i].RegNum = mem.Mem.Base
 						relatedOperands[i].HasValue = true
 						relatedOperands[i].LinkValueType = LinkValueTypeMem
-						relatedOperands[i].LinkMem = &RiscVMem{RegNum: mem.Mem.Base, Offset: mem.Mem.Disp, Value: 0, HasValue: false}
-						//regName := capstone.GetRiscVRegName(relatedOperands[i].LinkMem.RegNum)
-						//logger.ShowAppMsg("Load Related Reg found: [%s][%d], LinkMem:[%s][%d]\n", relatedOperand.RegName, relatedOperand.RegNum, regName, relatedOperands[i].LinkMem.RegNum)
+						relatedOperands[i].LinkMem = &linkReg
 					}
 				}
 				continue
@@ -512,11 +504,12 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (func
 					// TODO: ここで依存するレジスタの内容を書き換えて問題ないか？
 					if relatedOperand.LinkValueType == LinkValueTypeMem {
 						// Update LinkMem to Reg
+						logger.DLog("Update relatedOperand by store Insn , 0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
 						isSameBase := relatedOperand.LinkMem.RegNum == op1.Mem.Base
 						isSameOffset := uint(relatedOperand.LinkMem.Offset) == uint(op1.Mem.Disp)
 						if isSameBase && isSameOffset {
 							regName := capstone.GetRiscVRegName(op0.Reg)
-							logger.DLog("related reg:[%s] updated to reg:[%s]", relatedOperands[i].RegName, regName)
+							logger.DLog("related reg:[%s] updated to reg:[%s], regNum:[%d]", relatedOperands[i].RegName, regName, op0.Reg)
 							relatedOperands[i].HasValue = false
 							relatedOperands[i].LinkValueType = LinkValueTypeNone
 							relatedOperands[i].LinkMem = nil
@@ -526,34 +519,11 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (func
 					}
 				}
 			}
-
-			isFuncCall := isFuncCallInsn(&insn)
-			if isFuncCall {
-				for i, relatedOperand := range relatedOperands {
-					if !relatedOperand.HasValue {
-						continue
-					}
-
-					// TODO: 呼び出している関数が破壊するレジスタを依存先として持っているか？をチェックすべき
-					// update LinkReg → Func
-					//getFuncInfo
-					//relatedOperands[i].LinkReg = nil
-					op := insn.Riscv.Operands[0]
-					jmpAddr := uint64(insn.Address) + uint64(op.Imm)
-					funcName := ""
-					exist, f := (*targetObj).GetFuncByAddr(jmpAddr)
-					if exist {
-						funcName = f.Name
-					}
-					relatedOperands[i].LinkValueType = LinkValueTypeFunc
-					relatedOperands[i].LinkFunc = &RiscVFunc{FuncName: funcName, Addr: jmpAddr}
-				}
-			}
 		}
 		basicBlk.RelatedOperands = relatedOperands
 		basicBlks[entryAddr] = basicBlk
 	}
-	funcSlice = FuncSlice{BasicBlks: basicBlks, DirtyRegs: dirtyRegs}
+	funcSlice = FuncSlice{BasicBlks: basicBlks}
 	return funcSlice
 }
 
@@ -565,7 +535,6 @@ func isMvInsn(insn *capstone.Instruction) (isMv bool) {
 
 func isRetInsn(insn *capstone.Instruction) bool {
 	nm := strings.ToUpper(insn.Mnemonic)
-	logger.DLog(nm)
 	if nm == "C.JR" {
 		op := insn.Riscv.Operands[0]
 		if op.Reg == capstone.RISCV_REG_X1 {
@@ -608,63 +577,29 @@ func isFuncCallInsn(insn *capstone.Instruction) (isFuncCall bool) {
 	_, isFuncCall = fancCallInsnMap[nm]
 	return isFuncCall
 }
-func checkDirtyRegs(insn *capstone.Instruction) (dirtyRegs []uint) {
+
+func getRelatedOperands(insn *capstone.Instruction) (relatedOperands []RiscVReg) {
 	nm := strings.ToUpper(insn.Mnemonic)
-	switch nm {
-	// ALU Insn
-	case "ADD":
-		fallthrough
-	case "SUB":
-	case "SLT":
-	case "SLTU":
-	case "XOR":
-	case "OR":
-	case "AND":
-	// ALU With Immediate Insn
-	case "ADDI":
-	case "SLTI":
-	case "SLTIU":
-	case "XORI":
-	case "ORI":
-	case "ANDI":
-	// Shift Insn
-	case "SLL":
-	case "SRL":
-	case "SRA":
-	case "SLLI":
-	case "SRLI":
-	case "SRAI":
-	// Load mem → reg
-	case "LB":
-	case "LH":
-	case "LW":
-	case "LBU":
-	case "LHU":
-	case "LD":
-	case "JAL":
-	case "JALR":
-	case "AUIPC":
-	case "LUI":
-	// CSR Insn
-	case "CSRRW":
-	case "CSRRS":
-	case "CSRRC":
-	case "CSRRWI":
-	case "CSRRSI":
-	case "CSRRCI":
-	// Mul,Div Insn
-	case "MUL":
-	case "MULH":
-	case "MULSU":
-	case "MULHU":
-	case "DIV":
-	case "DIVU":
-	case "REM":
-	case "REMU":
-		reg := insn.Riscv.Operands[0]
-		dirtyRegs = append(dirtyRegs, reg.Reg)
+	if nm == "BNE" {
+		operand := insn.Riscv.Operands[0]
+		reg0Num := operand.Reg
+		reg0Name := capstone.GetRiscVRegName(operand.Reg)
+
+		operand = insn.Riscv.Operands[1]
+		reg1Num := operand.Reg
+		reg1Name := capstone.GetRiscVRegName(operand.Reg)
+
+		relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg0Num, RegName: reg0Name, HasValue: false})
+		relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg1Num, RegName: reg1Name, HasValue: false})
 	}
-	return dirtyRegs
+	if nm == "BEQZ" || nm == "C.BEQZ" {
+		operand := insn.Riscv.Operands[0]
+		reg0Num := operand.Reg
+		reg0Name := capstone.GetRiscVRegName(operand.Reg)
+
+		relatedOperands = append(relatedOperands, RiscVReg{RegNum: reg0Num, RegName: reg0Name, HasValue: false})
+	}
+	return relatedOperands
 }
 
 func isBranchInsn(insn *capstone.Instruction) (isBranch bool, isConditionalBranch bool) {
