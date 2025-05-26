@@ -316,22 +316,8 @@ func main() {
 			logger.ShowErrorMsg("Failed to disassemble\n")
 			os.Exit(-1)
 		}
-		funcSlice := backwardSlice(insns, &targetObj)
-		funcSliceMap[elfFuncInfo.Addr] = funcSlice
-		basicBlk, exist := funcSlice.BasicBlks[elfFuncInfo.Addr]
-		if exist {
-			for _, relatedOperand := range basicBlk.RelatedOperands {
-				logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
-				if relatedOperand.HasValue {
-					logger.ShowErrorMsg("LinkValue Type:[%d]\n", relatedOperand.LinkValueType)
-				} else {
-					logger.ShowErrorMsg("\n")
-				}
-			}
-		} else {
-			logger.DLog("%s entry block not found \n", elfFuncInfo.Name)
-		}
 		// 引数・ローカル変数の情報を取得
+		var dbgFunc *dwarf.Dwarf32FuncInfo = nil
 		for _, dbgInfo := range dbgInfos {
 			dbgFunc, exist := dbgInfo.Funcs[elfFuncInfo.Addr]
 			if !exist {
@@ -349,6 +335,22 @@ func main() {
 				logger.DLog("Name:%s, Location(Reg:%d, Offset:%d)\n", arg.Name, arg.Location.Reg, arg.Location.Offset)
 			}
 			break
+		}
+
+		funcSlice := backwardSlice(insns, &targetObj, dbgFunc)
+		funcSliceMap[elfFuncInfo.Addr] = funcSlice
+		basicBlk, exist := funcSlice.BasicBlks[elfFuncInfo.Addr]
+		if exist {
+			for _, relatedOperand := range basicBlk.RelatedOperands {
+				logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
+				if relatedOperand.HasValue {
+					logger.ShowErrorMsg("LinkValue Type:[%d]\n", relatedOperand.LinkValueType)
+				} else {
+					logger.ShowErrorMsg("\n")
+				}
+			}
+		} else {
+			logger.DLog("%s entry block not found \n", elfFuncInfo.Name)
 		}
 	}
 
@@ -397,7 +399,7 @@ func main() {
 	*/
 }
 
-func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (funcSlice FuncSlice) {
+func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject, dbgInfo *dwarf.Dwarf32FuncInfo) (funcSlice FuncSlice) {
 	basicBlks := make(map[uint64]BasicBlock)
 	var curBasickBlk *BasicBlock
 
@@ -415,6 +417,20 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject) (func
 			}
 		}
 		curBasickBlk.Insns = append(curBasickBlk.Insns, insn)
+
+		// 引数・ローカル変数のチェック
+		isLoadImm := isLoadImmInsn(&insn)
+		if isLoadImm {
+			for _, arg := range dbgInfo.Args {
+				mem := insn.Riscv.Operands[1]
+				if arg.Location.Reg == uint32(mem.Mem.Base) {
+					if int64(arg.Location.Offset) == mem.Mem.Disp {
+						logger.DLog("Arg Store Found!!!\n")
+						//reg := insn.Riscv.Operands[0]
+					}
+				}
+			}
+		}
 
 		//le_bytes := reverse(insn.Bytes)
 		//logger.ShowAppMsg("**** branch found, 0x%x:\t%X\t%s\t%s, OpCount:%d\n", insn.Address, le_bytes, insn.Mnemonic, insn.OpStr, insn.Riscv.OpCount)
