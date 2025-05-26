@@ -319,21 +319,22 @@ func main() {
 		// 引数・ローカル変数の情報を取得
 		var dbgFunc *dwarf.Dwarf32FuncInfo = nil
 		for _, dbgInfo := range dbgInfos {
-			dbgFunc, exist := dbgInfo.Funcs[elfFuncInfo.Addr]
+			dbg_f, exist := dbgInfo.Funcs[elfFuncInfo.Addr]
 			if !exist {
 				continue
 			}
-			logger.DLog("Name:%s(%s), Addr:0x%0X, SrcFile:%s, FrameBase:%d\n", dbgFunc.Name, dbgFunc.LinkageName, dbgFunc.Addr, dbgFunc.SrcFilePath, dbgFunc.FrameBase)
+			logger.DLog("Name:%s(%s), Addr:0x%0X, SrcFile:%s, FrameBase:%d\n", dbg_f.Name, dbg_f.LinkageName, dbg_f.Addr, dbg_f.SrcFilePath, dbg_f.FrameBase)
 
-			logger.DLog("Args: %d\n", len(dbgFunc.Args))
-			for _, arg := range dbgFunc.Args {
+			logger.DLog("Args: %d\n", len(dbg_f.Args))
+			for _, arg := range dbg_f.Args {
 				logger.DLog("Name:%s, Location(Reg:%d, Offset:%d)\n", arg.Name, arg.Location.Reg, arg.Location.Offset)
 			}
 
-			logger.DLog("Local Vars: %d\n", len(dbgFunc.LocalVars))
-			for _, arg := range dbgFunc.LocalVars {
+			logger.DLog("Local Vars: %d\n", len(dbg_f.LocalVars))
+			for _, arg := range dbg_f.LocalVars {
 				logger.DLog("Name:%s, Location(Reg:%d, Offset:%d)\n", arg.Name, arg.Location.Reg, arg.Location.Offset)
 			}
+			dbgFunc = &dbg_f
 			break
 		}
 
@@ -419,7 +420,7 @@ func backwardSlice(insns []capstone.Instruction, targetObj *elf.ElfObject, dbgIn
 		curBasickBlk.Insns = append(curBasickBlk.Insns, insn)
 
 		// 引数・ローカル変数のチェック
-		isLoadImm := isLoadImmInsn(&insn)
+		isLoadImm := isLoadMemInsn(&insn)
 		if isLoadImm {
 			for _, arg := range dbgInfo.Args {
 				mem := insn.Riscv.Operands[1]
