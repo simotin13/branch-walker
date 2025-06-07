@@ -1198,6 +1198,27 @@ type Dwarf32FrameInfo struct {
 	FDEs map[uint64]Dwarf32FDE // address-FDE map
 }
 
+type RegRuleType int
+
+const (
+	RegRuleUndefined RegRuleType = iota
+	RegRuleSameValue
+	RegRuleOffset
+)
+
+type RegRule struct {
+	Reg      uint8
+	RuleType RegRuleType
+	Offset   int32
+}
+
+type FrameStatus struct {
+	CFAReg     uint8
+	Offset     int32
+	Location   uint64
+	RegRuleMap map[uint8]RegRule
+}
+
 type Dwarf32Location struct {
 	Reg    uint32
 	Offset int32
@@ -1773,6 +1794,145 @@ func ReadFrameInfo(bin []byte) Dwarf32FrameInfo {
 		frameInfo.FDEs[uint64(fde.InitialLocation)] = fde
 	}
 	return frameInfo
+}
+
+func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8, codeAlignmentFactor uint32, dataAlignmentFactor int32) (offset uint64) {
+	offset = 0
+	cfaOpcode := Instructions[0]
+	offset++
+	hi2bits := (cfaOpcode & 0xC0) >> 6
+	low6bits := cfaOpcode & 0x3F
+	if hi2bits == DW_CFA_advance_loc {
+		logger.DLog("cfa ins DW_CFA_advance_loc")
+		frameStatus.Location += uint64(uint32(low6bits) * codeAlignmentFactor)
+		return offset
+	}
+	if hi2bits == DW_CFA_offset {
+		logger.DLog("cfa ins DW_CFA_offset")
+		factoredOffset, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+
+		regRule, exist := frameStatus.RegRuleMap[low6bits]
+		regOffset := int32(factoredOffset * uint64(dataAlignmentFactor))
+		if exist {
+			regRule.RuleType = RegRuleOffset
+			regRule.Offset = regOffset
+			frameStatus.RegRuleMap[low6bits] = regRule
+		} else {
+			regRule = RegRule{Reg: low6bits, RuleType: RegRuleOffset, Offset: regOffset}
+			frameStatus.RegRuleMap[low6bits] = regRule
+		}
+		return offset
+	}
+	if hi2bits == DW_CFA_restore {
+		logger.DLog("cfa ins DW_CFA_restore")
+		// TODO
+		return offset
+	}
+
+	name := CFANameMap[low6bits]
+	logger.DLog("cfa ins:%s", name)
+	switch low6bits {
+	case DW_CFA_nop:
+		// no operand
+		break
+	case DW_CFA_set_loc:
+		// no operand
+		if dwarfFormat == DWARF_32BIT_FORMAT {
+			offset += 4
+		} else {
+			offset += 8
+		}
+	case DW_CFA_advance_loc1:
+		// TODO
+		offset += 1
+		break
+	case DW_CFA_advance_loc2:
+		// TODO
+		offset += 2
+		break
+	case DW_CFA_advance_loc4:
+		// TODO
+		offset += 4
+		break
+	case DW_CFA_offset_extended:
+		// TODO
+		// Operand1 register
+		_, size := ReaduLEB128(bin[offset:])
+		//fmt.Println(reg)
+		offset += uint64(size)
+
+		// Operand2 offset
+		_, size = ReaduLEB128(bin[offset:])
+		//fmt.Println(op2Offset)
+		offset += uint64(size)
+		break
+	case DW_CFA_restore_extended:
+		// Operand1 register
+		_, size := ReaduLEB128(bin[offset:])
+		offset += uint64(size)
+		break
+	case DW_CFA_undefined:
+		// Operand1 register
+		_, size := ReaduLEB128(bin[offset:])
+		offset += uint64(size)
+		break
+	case DW_CFA_same_value:
+		// Operand1 register
+		_, size := ReaduLEB128(bin[offset:])
+		offset += uint64(size)
+		break
+	case DW_CFA_register:
+		// TODO
+		// Operand1 register
+		_, size := ReaduLEB128(bin[offset:])
+		//fmt.Println(reg)
+		offset += uint64(size)
+
+		// Operand2 offset
+		_, size = ReaduLEB128(bin[offset:])
+		//fmt.Println(op2Offset)
+		offset += uint64(size)
+		break
+	case DW_CFA_remember_state:
+		break
+	case DW_CFA_restore_state:
+		break
+	case DW_CFA_def_cfa:
+		// TODO
+		// Operand1 register
+		_, size := ReaduLEB128(bin[offset:])
+		offset += uint64(size)
+
+		// Operand2 offset
+		_, size = ReaduLEB128(bin[offset:])
+		offset += uint64(size)
+	case DW_CFA_def_cfa_register:
+		// Operand2 offset
+		cfa_reg, size := ReaduLEB128(bin[offset:])
+		fmt.Println(cfa_reg)
+		offset += uint64(size)
+	case DW_CFA_def_cfa_offset:
+		// TODO
+		cfaOffset, size := ReaduLEB128(bin[offset:])
+		logger.DLog("cfaOffset:0x%X", cfaOffset)
+		offset += uint64(size)
+	default:
+		logger.DLog("unexpected ins:0x%X", cfaOpcode)
+		panic("unexpected cfa")
+	}
+}
+func executeCIE(cieIdx uint32, fs *FrameStatus, frameInfo *Dwarf32FrameInfo) {
+	cie := frameInfo.CIEs[cieIdx]
+	program := cie.Program
+
+	// See DWARF2 7.23 Call Frame Information
+	var offset uint64 = 0
+	cfaOpcode := program[0]
+	offset++
+	hi2bits := (cfaOpcode & 0xC0) >> 6
+	low6bits := cfaOpcode & 0x3F
+
 }
 
 func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf32FrameInfo, debug_info []byte, elfObj elf.ElfObject, offsetLineInfoMap map[uint64]Dwarf32LineInfoHdr) []Dwarf32CuDebugInfo {
