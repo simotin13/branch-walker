@@ -1826,7 +1826,19 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 	}
 	if hi2bits == DW_CFA_restore {
 		logger.DLog("cfa ins DW_CFA_restore")
-		// TODO
+
+		// TODO CIEの設定に従う
+		panic("TODO follow CIE entry")
+		/*
+			regRule, exist := frameStatus.RegRuleMap[low6bits]
+			if exist {
+				regRule.RuleType = RegRuleOffset
+				frameStatus.RegRuleMap[low6bits] = regRule
+			} else {
+				regRule = RegRule{Reg: low6bits, RuleType: RegRuleOffset, Offset: regOffset}
+				frameStatus.RegRuleMap[low6bits] = regRule
+			}
+		*/
 		return offset
 	}
 
@@ -1838,6 +1850,7 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 		break
 	case DW_CFA_set_loc:
 		// no operand
+		// TODO address_size に従う
 		if dwarfFormat == DWARF_32BIT_FORMAT {
 			offset += 4
 		} else {
