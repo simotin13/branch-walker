@@ -254,7 +254,7 @@ func main() {
 		os.Exit(-1)
 	}
 	debug_frame := targetObj.GetSectionBinByName(".debug_frame")
-	frameInfo := dwarf.ReadFrameInfo(debug_frame)
+	frameInfo := dwarf.ReadFrameInfo(debug_frame, ".debug_frame")
 
 	if !targetObj.HasSection(".debug_info") {
 		logger.ShowErrorMsg(".debug_info section not found. You need to set -g option for build.\n")

@@ -1172,30 +1172,32 @@ type Dwarf32LineInfoHdr struct {
 }
 
 // Common Information Entry
-type Dwarf32CIE struct {
-	CIE_id                uint32
+type CIE struct {
+	DwarfFormat           uint8
+	CIE_id                uint64
 	Version               uint8
 	Augmentation          string // 1: DWARF2 3: DWARF3 4: DWARF4
 	AddressSize           uint8  // Only exists DWARF4
 	SegmentSize           uint8  // Only exists DWARF4
-	CodeAlignmentFactor   uint32
-	DataAlignmentFactor   uint32
+	CodeAlignmentFactor   uint64
+	DataAlignmentFactor   int64
 	ReturnAddressRegister uint8
 	Program               []uint8
 }
 
-type Dwarf32FDE struct {
-	Length          uint32
-	CIEPointer      uint32
-	CIEIdx          uint32
-	InitialLocation uint32
-	AddressRange    uint32
+type FDE struct {
+	DwarfFormat     uint8
+	Length          uint64
+	CIEPointer      uint64
+	CIEIdx          uint64
+	InitialLocation uint64
+	AddressRange    uint64
 	Program         []uint8
 }
 
 type Dwarf32FrameInfo struct {
-	CIEs []Dwarf32CIE
-	FDEs map[uint64]Dwarf32FDE // address-FDE map
+	CIEs []CIE
+	FDEs map[uint64]FDE // address-FDE map
 }
 
 type RegRuleType int
@@ -1282,7 +1284,6 @@ func ReadAranges(bin []byte) map[uint32]Dwarf32ArangeInfo {
 		arangeInfo := Dwarf32ArangeInfo{}
 		arangeInfoHdr := Dwarf32ArangeInfoHdr{}
 
-		// TODO 4 or 8
 		// unit_length initial length(4 or 8 bytes)
 		tmp, _ := binutil.FromLeToUInt32(bin[offset:])
 		offset += 4
@@ -1480,7 +1481,7 @@ func readBinarySearchTable(tableEnc uint8, bin []byte, fdeCount uint64) uint64 {
 }
 
 // See DWARF2 7.23 Call Frame Information
-func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
+func readCFAInstruction(bin []uint8, dwarfFormat uint8) uint64 {
 	var offset uint64 = 0
 	cfaOpcode := bin[0]
 	offset++
@@ -1519,15 +1520,12 @@ func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 	case DW_CFA_advance_loc1:
 		// TODO
 		offset += 1
-		break
 	case DW_CFA_advance_loc2:
 		// TODO
 		offset += 2
-		break
 	case DW_CFA_advance_loc4:
 		// TODO
 		offset += 4
-		break
 	case DW_CFA_offset_extended:
 		// TODO
 		// Operand1 register
@@ -1539,22 +1537,18 @@ func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 		_, size = ReaduLEB128(bin[offset:])
 		//fmt.Println(op2Offset)
 		offset += uint64(size)
-		break
 	case DW_CFA_restore_extended:
 		// Operand1 register
 		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
-		break
 	case DW_CFA_undefined:
 		// Operand1 register
 		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
-		break
 	case DW_CFA_same_value:
 		// Operand1 register
 		_, size := ReaduLEB128(bin[offset:])
 		offset += uint64(size)
-		break
 	case DW_CFA_register:
 		// TODO
 		// Operand1 register
@@ -1566,11 +1560,8 @@ func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 		_, size = ReaduLEB128(bin[offset:])
 		//fmt.Println(op2Offset)
 		offset += uint64(size)
-		break
 	case DW_CFA_remember_state:
-		break
 	case DW_CFA_restore_state:
-		break
 	case DW_CFA_def_cfa:
 		// TODO
 		// Operand1 register
@@ -1583,7 +1574,7 @@ func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 	case DW_CFA_def_cfa_register:
 		// Operand2 offset
 		cfa_reg, size := ReaduLEB128(bin[offset:])
-		fmt.Println(cfa_reg)
+		fmt.Println("cfa_reg:", cfa_reg)
 		offset += uint64(size)
 	case DW_CFA_def_cfa_offset:
 		// TODO
@@ -1598,205 +1589,268 @@ func readCFAInstruction(bin []uint8, dwarfFormat uint64) uint64 {
 	return offset
 }
 
-func ReadFrameInfo(bin []byte) Dwarf32FrameInfo {
+func ReadFrameInfo(bin []byte, sectionName string) Dwarf32FrameInfo {
 
 	var frameInfo Dwarf32FrameInfo
-	frameInfo.FDEs = make(map[uint64]Dwarf32FDE)
-
-	// .debug_frame
-	// offset-Index Map
 	var ciePointerMap map[uint64]uint32 = make(map[uint64]uint32)
-	var cie Dwarf32CIE
-	var offset uint64 = 0
-
 	var cieIdx uint32 = 0
-	ciePointerMap[offset] = cieIdx
 
-	unitLengthSize := 4
-	// unit_length initial length(4 or 8 bytes)
-	tmp, _ := binutil.FromLeToUInt32(bin[offset:])
-	offset += 4
+	frameInfo.FDEs = make(map[uint64]FDE)
+	var offset uint64 = 0
+	secSize := uint64(len(bin))
+	for offset < secSize {
+		entryOffset := offset
 
-	// initial length
-	var initialLength uint64 = 0
-	var dwarfFormat uint64 = 0
-
-	if tmp < 0xffffff00 {
-		// 32-bit DWARF Format
-		initialLength = uint64(tmp)
-		dwarfFormat = DWARF_32BIT_FORMAT
-	} else {
-		// 64-bit DWARF Format
-		initialLength, _ = binutil.FromLeToUInt64(bin[offset:])
-		dwarfFormat = DWARF_64BIT_FORMAT
-		offset += 8
-		unitLengthSize += 8
-	}
-
-	logger.DLog("%d", initialLength)
-
-	// CIE id
-	var cieId uint64 = 0
-	if dwarfFormat == DWARF_32BIT_FORMAT {
+		// unit_length initial length(4 or 8 bytes)
 		tmp, _ := binutil.FromLeToUInt32(bin[offset:])
-		cieId = uint64(tmp)
 		offset += 4
-	} else {
-		cieId, _ = binutil.FromLeToUInt64(bin[offset:])
-		offset += 8
-	}
-	logger.DLog("%d", cieId)
-	cie.CIE_id = uint32(cieId)
 
-	// version ubyte
-	// DWARF 2: 1, DWARF 3: 3, DWARF 4: 4
-	version := uint8(bin[offset])
-	cie.Version = version
-	offset += 1
-	logger.DLog("%d", version)
+		// initial length
+		var initialLength uint64 = 0
+		var dwarfFormat uint8 = 0
 
-	// augmentation
-	// NULL terminated UTF-8 string
-	augmentation := binutil.GetString(bin, offset)
-	cie.Augmentation = augmentation
-	offset += uint64(len(augmentation) + 1)
-
-	// "eh" If the Augmentation string has the value "eh", then the EH Data field shall be present.
-	if augmentation == "eh" {
-		var ehData uint64 = 0
-		if dwarfFormat == DWARF_32BIT_FORMAT {
-			tmp, _ := binutil.FromLeToUInt32(bin[offset:])
-			ehData = uint64(tmp)
-			offset += 4
+		if tmp < 0xffffff00 {
+			// 32-bit DWARF Format
+			initialLength = uint64(tmp)
+			dwarfFormat = DWARF_32BIT_FORMAT
 		} else {
-			tmp, _ := binutil.FromLeToUInt64(bin[offset:])
-			ehData = uint64(tmp)
+			// 64-bit DWARF Format
+			initialLength, _ = binutil.FromLeToUInt64(bin[offset:])
+			dwarfFormat = DWARF_64BIT_FORMAT
 			offset += 8
 		}
 
-		logger.DLog("%d", ehData)
-	}
+		logger.DLog("initialLength: %d", initialLength)
+		var unitComsumedSize uint32 = 0
 
-	// code_alignment_factor
-	codeAlignmentFactor, size := ReaduLEB128(bin[offset:])
-	cie.CodeAlignmentFactor = uint32(codeAlignmentFactor)
-	logger.DLog("%d", codeAlignmentFactor)
-	offset += uint64(size)
+		// CIE id
+		var cieId uint64 = 0
+		if dwarfFormat == DWARF_32BIT_FORMAT {
+			tmp, _ := binutil.FromLeToUInt32(bin[offset:])
+			cieId = uint64(tmp)
+			offset += 4
+			unitComsumedSize += 4
+		} else {
+			cieId, _ = binutil.FromLeToUInt64(bin[offset:])
+			offset += 8
+			unitComsumedSize += 8
+		}
+		logger.DLog("CIE_id: 0x%X", cieId)
 
-	// data_alignment_factor
-	dataAlignmentFactor, size := ReadsLEB128(bin[offset:])
-	cie.DataAlignmentFactor = uint32(dataAlignmentFactor)
-	logger.DLog("%d", dataAlignmentFactor)
-	offset += uint64(size)
-
-	// return_address_register
-	return_address_register, size := ReaduLEB128(bin[offset:])
-	cie.ReturnAddressRegister = uint8(return_address_register)
-	logger.DLog("%d", return_address_register)
-	offset += uint64(size)
-
-	// Augmentation Length
-	// An unsigned LEB128 encoded value indicating the length in bytes of the Augmentation Data.
-	// This field is only present if the Augmentation String contains the character 'z'.
-	var AugmentationLength uint64 = 0
-	if strings.Contains(augmentation, "z") {
-		AugmentationLength, size = ReaduLEB128(bin[offset:])
-		offset += uint64(size)
-		logger.DLog("%d", AugmentationLength)
-	}
-
-	// Augmentation Data
-	// A block of data whose contents are defined by the contents of the Augmentation String as described below.
-	// This field is only present if the Augmentation String contains the character 'z'.
-	var ptrEnc uint8 = 0
-	if strings.Contains(augmentation, "z") {
-		var augDataPos uint64 = 0
-		for augDataPos < AugmentationLength {
-			if strings.Contains(augmentation, "R") {
-				// "zR"
-				// A 'R' may be present at any position after the first character of the string.
-				// This character may only be present if 'z' is the first character of the string.
-				// If present, The Augmentation Data shall include a 1 byte argument that represents the pointer encoding for the address pointers used in the FDE.
-				ptrEnc = bin[offset]
-				offset += 1
-				augDataPos += 1
-				logger.DLog("%d", ptrEnc)
-			} else {
-				panic("Unexpected augmentation")
+		isCIE := false
+		if cieId == 0xFFFFFFFF || cieId == 0xFFFFFFFFFFFFFFFF {
+			isCIE = true
+		} else {
+			// the value 0 in .eh_frame section means CIE also(See AMD64 System V Application Binary Interface Spec)
+			if sectionName == ".eh_frame" && cieId == 0 {
+				isCIE = true
 			}
 		}
-	}
 
-	// std::uint8_t fde_pointer_encoding = DW_EH_PE_udata8 | DW_EH_PE_absptr;
-	// fde_pointer_encoding := 4
-	// initial_instructions
-	// array of DW_CFA_xxx
-	var insPos uint64 = 0
-	insLen := uint64(unitLengthSize + int(initialLength) - int(offset))
-	progStart := offset
-	progEnd := uint64(offset + insLen)
-	program := bin[progStart:progEnd]
-	cie.Program = program
-	for insPos < insLen {
-		insSize := readCFAInstruction(bin[offset:], dwarfFormat)
-		offset += uint64(insSize)
-		insPos += uint64(insSize)
-	}
-	logger.DLog("%d", offset)
-	frameInfo.CIEs = append(frameInfo.CIEs, cie)
+		if isCIE {
+			// This entry is CIE
+			// See DWARF2 Spec, 7.23 Call Frame Information "The value of the CIE id in the CIE header is 0xFFFFFFFF."
+			logger.DLog("CIE Found: %d", cieId)
+			ciePointerMap[entryOffset] = cieIdx
+			cieIdx++
 
-	// ====================================================
-	// FDE Frame Description Entry Format
-	// Note: for DWARF 2
-	// ====================================================
-	secSize := uint64(len(bin))
-	for offset < secSize {
-		var fde Dwarf32FDE
-		// length
-		length, _ := binutil.FromLeToUInt32(bin[offset:])
-		fde.Length = length
-		offset += 4
-		logger.DLog("length: %d", length)
+			// ============================================
+			// Decode CIE
+			// ============================================
+			var cie CIE
+			cie.DwarfFormat = dwarfFormat
+			cie.CIE_id = cieId
 
-		// CIE Pointer
-		ciePointer, _ := binutil.FromLeToUInt32(bin[offset:])
-		cieIdx := ciePointerMap[uint64(ciePointer)]
-		fde.CIEPointer = ciePointer
-		fde.CIEIdx = cieIdx
-		offset += 4
-		logger.DLog("ciePointer: 0x%X, cieIdx:%d\n", ciePointer, cieIdx)
+			// version ubyte
+			// DWARF 2: 1, DWARF 3: 3, DWARF 4: 4
+			version := uint8(bin[offset])
+			cie.Version = version
+			offset += 1
+			unitComsumedSize += 1
+			logger.DLog("version: %d", version)
+			if version != 1 {
+				panic("Support DWARF2 only")
+			}
 
-		// initial_location
-		// TODO: addressSize: 4
-		initial_location, _ := binutil.FromLeToUInt32(bin[offset:])
-		fde.InitialLocation = initial_location
-		offset += 4
-		logger.DLog("initial_location: 0x%X\n", initial_location)
+			// augmentation
+			// NULL terminated UTF-8 string
+			augmentation := binutil.GetString(bin, offset)
+			logger.DLog("augmentation: [%s]", augmentation)
 
-		// address_range
-		// TODO: addressSize: 4
-		address_range, _ := binutil.FromLeToUInt32(bin[offset:])
-		fde.AddressRange = address_range
-		offset += 4
-		logger.DLog("address_range: 0x%X\n", address_range)
+			cie.Augmentation = augmentation
+			offset += uint64(len(augmentation) + 1)
+			unitComsumedSize += uint32(len(augmentation) + 1)
 
-		var insTotal uint64 = 0
-		progStart := offset
-		progLength := uint64(length - 12)
-		progEnd := offset + progLength
-		fde.Program = bin[progStart:progEnd]
-		for insTotal < progLength {
-			insSize := readCFAInstruction(bin[offset:], dwarfFormat)
-			insTotal += insSize
-			offset += uint64(insSize)
+			// "eh" If the Augmentation string has the value "eh", then the EH Data field shall be present.
+			if augmentation == "eh" {
+				var ehData uint64 = 0
+				if dwarfFormat == DWARF_32BIT_FORMAT {
+					tmp, _ := binutil.FromLeToUInt32(bin[offset:])
+					ehData = uint64(tmp)
+					offset += 4
+					unitComsumedSize += 4
+				} else {
+					tmp, _ := binutil.FromLeToUInt64(bin[offset:])
+					ehData = uint64(tmp)
+					offset += 8
+					unitComsumedSize += 8
+				}
+
+				logger.DLog("%d", ehData)
+			}
+
+			// code_alignment_factor
+			codeAlignmentFactor, size := ReaduLEB128(bin[offset:])
+			cie.CodeAlignmentFactor = codeAlignmentFactor
+			logger.DLog("codeAlignmentFactor: %d", codeAlignmentFactor)
+			offset += uint64(size)
+			unitComsumedSize += uint32(size)
+
+			// data_alignment_factor
+			dataAlignmentFactor, size := ReadsLEB128(bin[offset:])
+			cie.DataAlignmentFactor = dataAlignmentFactor
+			logger.DLog("dataAlignmentFactor: %d", dataAlignmentFactor)
+			offset += uint64(size)
+			unitComsumedSize += uint32(size)
+
+			// return_address_register
+			return_address_register, size := ReaduLEB128(bin[offset:])
+			cie.ReturnAddressRegister = uint8(return_address_register)
+			logger.DLog("return_address_register: %d", return_address_register)
+			offset += uint64(size)
+			unitComsumedSize += uint32(size)
+
+			// Augmentation Length
+			// An unsigned LEB128 encoded value indicating the length in bytes of the Augmentation Data.
+			// This field is only present if the Augmentation String contains the character 'z'.
+			var AugmentationLength uint64 = 0
+			if strings.Contains(augmentation, "z") {
+				AugmentationLength, size = ReaduLEB128(bin[offset:])
+				offset += uint64(size)
+				unitComsumedSize += uint32(size)
+				logger.DLog("%d", AugmentationLength)
+			}
+
+			// Augmentation Data
+			// A block of data whose contents are defined by the contents of the Augmentation String as described below.
+			// This field is only present if the Augmentation String contains the character 'z'.
+			var ptrEnc uint8 = 0
+			if strings.Contains(augmentation, "z") {
+				var augDataPos uint64 = 0
+				for augDataPos < AugmentationLength {
+					if strings.Contains(augmentation, "R") {
+						// "zR"
+						// A 'R' may be present at any position after the first character of the string.
+						// This character may only be present if 'z' is the first character of the string.
+						// If present, The Augmentation Data shall include a 1 byte argument that represents the pointer encoding for the address pointers used in the FDE.
+						ptrEnc = bin[offset]
+						offset += 1
+						augDataPos += 1
+						unitComsumedSize += 1
+						logger.DLog("ptrEnc: %d", ptrEnc)
+					} else {
+						panic("Unexpected augmentation")
+					}
+				}
+			}
+
+			// std::uint8_t fde_pointer_encoding = DW_EH_PE_udata8 | DW_EH_PE_absptr;
+			// fde_pointer_encoding := 4
+			// initial_instructions
+			// array of DW_CFA_xxx
+			var insPos uint64 = 0
+			insLen := initialLength - uint64(unitComsumedSize)
+			progStart := offset
+			progEnd := uint64(offset + insLen)
+			program := bin[progStart:progEnd]
+			cie.Program = program
+			for insPos < insLen {
+				insSize := readCFAInstruction(bin[offset:], dwarfFormat)
+				offset += uint64(insSize)
+				insPos += uint64(insSize)
+			}
+			logger.DLog("%d", offset)
+			frameInfo.CIEs = append(frameInfo.CIEs, cie)
+		} else {
+			// If CIE_id is not 0, 0xFFFFFFFF or 0xFFFFFFFFFFFFFFFF, the value is CIE Pointer and the entry is FDE.
+			// CIE Pointer is an offset from
+			// CIE Pointer is A uword constant offset into the .debug_frame section that denotes the CIE that is associated with this FDE.
+			// This value means negative offset from FDE entry to the related CIE.
+			logger.DLog("FDE found")
+
+			// ============================================
+			// Decode FDE
+			// ============================================
+			var fde FDE
+
+			fde.Length = initialLength
+
+			// CIE Pointer
+			ciePointer := cieId
+			fde.CIEPointer = ciePointer
+			fde.CIEIdx = ciePointer
+
+			/*
+					// ciePointer means negative offset from related CIE
+					cieOffset := entryOffset - ciePointer
+					cieIdx, exists := ciePointerMap[cieOffset]
+					if !exists {
+						panic("TODO")
+					}
+				fde.CIEIdx = cieIdx
+			*/
+
+			logger.DLog("CIE_pointer: 0x%X, cieIdx:%d\n", ciePointer, cieIdx)
+
+			// initial_location
+			if dwarfFormat == DWARF_32BIT_FORMAT {
+				initial_location, _ := binutil.FromLeToUInt32(bin[offset:])
+				fde.InitialLocation = uint64(initial_location)
+				offset += 4
+				unitComsumedSize += 4
+				logger.DLog("initial_location: 0x%X\n", initial_location)
+			} else {
+				initial_location, _ := binutil.FromLeToUInt64(bin[offset:])
+				fde.InitialLocation = initial_location
+				offset += 8
+				unitComsumedSize += 8
+				logger.DLog("initial_location: 0x%X\n", initial_location)
+			}
+
+			// address_range
+			if dwarfFormat == DWARF_32BIT_FORMAT {
+				address_range, _ := binutil.FromLeToUInt32(bin[offset:])
+				fde.AddressRange = uint64(address_range)
+				offset += 4
+				unitComsumedSize += 4
+				logger.DLog("address_range: 0x%X\n", address_range)
+			} else {
+				address_range, _ := binutil.FromLeToUInt64(bin[offset:])
+				fde.AddressRange = address_range
+				offset += 8
+				unitComsumedSize += 8
+				logger.DLog("address_range: 0x%X\n", address_range)
+			}
+
+			var insTotal uint64 = 0
+			progStart := offset
+			var progLength uint64 = initialLength - uint64(unitComsumedSize)
+			progEnd := offset + progLength
+			fde.Program = bin[progStart:progEnd]
+			for insTotal < progLength {
+				insSize := readCFAInstruction(bin[offset:], dwarfFormat)
+				insTotal += insSize
+				offset += uint64(insSize)
+			}
+			logger.DLog("InitialLocation: 0x%X\n", fde.InitialLocation)
+			frameInfo.FDEs[uint64(fde.InitialLocation)] = fde
 		}
-		logger.DLog("InitialLocation: 0x%X\n", fde.InitialLocation)
-		frameInfo.FDEs[uint64(fde.InitialLocation)] = fde
 	}
+
 	return frameInfo
 }
 
-func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8, codeAlignmentFactor uint32, dataAlignmentFactor int32) (offset uint64) {
+func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8, frameInfo *Dwarf32FrameInfo, cieIdx uint32, codeAlignmentFactor uint32, dataAlignmentFactor int32) (offset uint64) {
 	offset = 0
 	cfaOpcode := Instructions[0]
 	offset++
@@ -1826,9 +1880,8 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 	}
 	if hi2bits == DW_CFA_restore {
 		logger.DLog("cfa ins DW_CFA_restore")
-
-		// TODO CIEの設定に従う
-		panic("TODO follow CIE entry")
+		regNum := low6bits
+		executeCIE(frameStatus, regNum, cieIdx, frameInfo)
 		/*
 			regRule, exist := frameStatus.RegRuleMap[low6bits]
 			if exist {
@@ -1846,105 +1899,159 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 	logger.DLog("cfa ins:%s", name)
 	switch low6bits {
 	case DW_CFA_nop:
-		// no operand
+		// no operand, do nothing
 		break
 	case DW_CFA_set_loc:
 		// no operand
 		// TODO address_size に従う
-		if dwarfFormat == DWARF_32BIT_FORMAT {
-			offset += 4
-		} else {
-			offset += 8
-		}
+		//if dwarfFormat == DWARF_32BIT_FORMAT {
+		//			offset += 4
+		//		} else {
+		//offset += 8
+		//		}
 	case DW_CFA_advance_loc1:
 		// TODO
 		offset += 1
-		break
 	case DW_CFA_advance_loc2:
 		// TODO
 		offset += 2
-		break
 	case DW_CFA_advance_loc4:
 		// TODO
 		offset += 4
-		break
-	case DW_CFA_offset_extended:
-		// TODO
-		// Operand1 register
-		_, size := ReaduLEB128(bin[offset:])
-		//fmt.Println(reg)
-		offset += uint64(size)
+		/*
+			case DW_CFA_offset_extended:
+				// TODO
+				// Operand1 register
+				_, size := ReaduLEB128(bin[offset:])
+				//fmt.Println(reg)
+				offset += uint64(size)
 
-		// Operand2 offset
-		_, size = ReaduLEB128(bin[offset:])
-		//fmt.Println(op2Offset)
-		offset += uint64(size)
-		break
-	case DW_CFA_restore_extended:
-		// Operand1 register
-		_, size := ReaduLEB128(bin[offset:])
-		offset += uint64(size)
-		break
-	case DW_CFA_undefined:
-		// Operand1 register
-		_, size := ReaduLEB128(bin[offset:])
-		offset += uint64(size)
-		break
-	case DW_CFA_same_value:
-		// Operand1 register
-		_, size := ReaduLEB128(bin[offset:])
-		offset += uint64(size)
-		break
-	case DW_CFA_register:
-		// TODO
-		// Operand1 register
-		_, size := ReaduLEB128(bin[offset:])
-		//fmt.Println(reg)
-		offset += uint64(size)
+				// Operand2 offset
+				_, size = ReaduLEB128(bin[offset:])
+				//fmt.Println(op2Offset)
+				offset += uint64(size)
+				break
+			case DW_CFA_restore_extended:
+				// Operand1 register
+				_, size := ReaduLEB128(bin[offset:])
+				offset += uint64(size)
+				break
+			case DW_CFA_undefined:
+				// Operand1 register
+				_, size := ReaduLEB128(bin[offset:])
+				offset += uint64(size)
+				break
+			case DW_CFA_same_value:
+				// Operand1 register
+				_, size := ReaduLEB128(bin[offset:])
+				offset += uint64(size)
+				break
+			case DW_CFA_register:
+				// TODO
+				// Operand1 register
+				_, size := ReaduLEB128(bin[offset:])
+				//fmt.Println(reg)
+				offset += uint64(size)
 
-		// Operand2 offset
-		_, size = ReaduLEB128(bin[offset:])
-		//fmt.Println(op2Offset)
-		offset += uint64(size)
-		break
-	case DW_CFA_remember_state:
-		break
-	case DW_CFA_restore_state:
-		break
-	case DW_CFA_def_cfa:
-		// TODO
-		// Operand1 register
-		_, size := ReaduLEB128(bin[offset:])
-		offset += uint64(size)
+				// Operand2 offset
+				_, size = ReaduLEB128(bin[offset:])
+				//fmt.Println(op2Offset)
+				offset += uint64(size)
+				break
+			case DW_CFA_remember_state:
+				break
+			case DW_CFA_restore_state:
+				break
+			case DW_CFA_def_cfa:
+				// TODO
+				// Operand1 register
+				_, size := ReaduLEB128(bin[offset:])
+				offset += uint64(size)
 
-		// Operand2 offset
-		_, size = ReaduLEB128(bin[offset:])
-		offset += uint64(size)
-	case DW_CFA_def_cfa_register:
-		// Operand2 offset
-		cfa_reg, size := ReaduLEB128(bin[offset:])
-		fmt.Println(cfa_reg)
-		offset += uint64(size)
-	case DW_CFA_def_cfa_offset:
-		// TODO
-		cfaOffset, size := ReaduLEB128(bin[offset:])
-		logger.DLog("cfaOffset:0x%X", cfaOffset)
-		offset += uint64(size)
+				// Operand2 offset
+				_, size = ReaduLEB128(bin[offset:])
+				offset += uint64(size)
+			case DW_CFA_def_cfa_register:
+				// Operand2 offset
+				cfa_reg, size := ReaduLEB128(bin[offset:])
+				fmt.Println(cfa_reg)
+				offset += uint64(size)
+			case DW_CFA_def_cfa_offset:
+				// TODO
+				cfaOffset, size := ReaduLEB128(bin[offset:])
+				logger.DLog("cfaOffset:0x%X", cfaOffset)
+				offset += uint64(size)
+		*/
 	default:
 		logger.DLog("unexpected ins:0x%X", cfaOpcode)
 		panic("unexpected cfa")
 	}
+	return offset
 }
-func executeCIE(cieIdx uint32, fs *FrameStatus, frameInfo *Dwarf32FrameInfo) {
-	cie := frameInfo.CIEs[cieIdx]
-	program := cie.Program
 
-	// See DWARF2 7.23 Call Frame Information
+func executeCIE(frameStatus *FrameStatus, regNum uint8, cieIdx uint32, frameInfo *Dwarf32FrameInfo) {
+	cie := frameInfo.CIEs[cieIdx]
 	var offset uint64 = 0
-	cfaOpcode := program[0]
+	Instructions := cie.Program
+	cfaOpcode := Instructions[0]
 	offset++
+
+	codeAlignmentFactor := cie.CodeAlignmentFactor
+	dataAlignmentFactor := cie.DataAlignmentFactor
+
+	//program := cie.Program
 	hi2bits := (cfaOpcode & 0xC0) >> 6
 	low6bits := cfaOpcode & 0x3F
+	if hi2bits == DW_CFA_advance_loc {
+		logger.DLog("cfa ins DW_CFA_advance_loc")
+		frameStatus.Location += uint64(uint64(low6bits) * codeAlignmentFactor)
+		return
+	}
+	if hi2bits == DW_CFA_offset {
+		logger.DLog("cfa ins DW_CFA_offset")
+		factoredOffset, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+
+		regRule, exist := frameStatus.RegRuleMap[low6bits]
+		regOffset := int32(factoredOffset * uint64(dataAlignmentFactor))
+		if exist {
+			regRule.RuleType = RegRuleOffset
+			regRule.Offset = regOffset
+			frameStatus.RegRuleMap[low6bits] = regRule
+		} else {
+			regRule = RegRule{Reg: low6bits, RuleType: RegRuleOffset, Offset: regOffset}
+			frameStatus.RegRuleMap[low6bits] = regRule
+		}
+		return
+	}
+	if hi2bits == DW_CFA_restore {
+		logger.DLog("cfa ins DW_CFA_restore")
+		//regNum := low6bits
+		/*
+			regRule, exist := frameStatus.RegRuleMap[low6bits]
+			if exist {
+				regRule.RuleType = RegRuleOffset
+				frameStatus.RegRuleMap[low6bits] = regRule
+			} else {
+				regRule = RegRule{Reg: low6bits, RuleType: RegRuleOffset, Offset: regOffset}
+				frameStatus.RegRuleMap[low6bits] = regRule
+			}
+		*/
+		return
+	}
+
+	name := CFANameMap[low6bits]
+	logger.DLog("cfa ins:%s", name)
+	switch low6bits {
+	case DW_CFA_nop:
+		// no operand
+		break
+	case DW_CFA_set_loc:
+		// no operand
+	default:
+		logger.DLog("unexpected ins:0x%X", cfaOpcode)
+		panic("unexpected cfa")
+	}
 
 }
 
@@ -2319,7 +2426,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 							funcArg.Type = refval
 						}
 					} else {
-						fmt.Println("!!!! unhandled attr:%d", attr.Attr)
+						fmt.Printf("!!!! unhandled attr:%d", attr.Attr)
 					}
 					offset += 4
 				case DW_FORM_sec_offset:
@@ -2513,7 +2620,7 @@ func ReadDebugInfo(offsetArangeMap map[uint32]Dwarf32ArangeInfo, frameInfo Dwarf
 							if abbrev.Tag == DW_TAG_variable {
 								if dwarfFuncInfo != nil {
 									if dwarfFuncInfo.FrameBase == FRAME_TYPE_CFI {
-										fde, _ := frameInfo.FDEs[dwarfFuncInfo.Addr]
+										fde := frameInfo.FDEs[dwarfFuncInfo.Addr]
 										cie := frameInfo.CIEs[fde.CIEIdx]
 										logger.TLog("CIE Id: %d\n", cie.CIE_id)
 									} else {
@@ -3285,7 +3392,6 @@ func readLineNumberProgram(fileName string, lineInfoHdr Dwarf32LineInfoHdr, secB
 	if !endOfSeq {
 		panic("Error DW_LNE_end_sequence not found")
 	}
-	return
 }
 
 func addFuncAddrLineInfo(lineInfoHdr Dwarf32LineInfoHdr, lnsm LineNumberStateMachine, funcAddr uint64, elfObj elf.ElfObject) {
