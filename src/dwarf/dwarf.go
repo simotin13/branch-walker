@@ -1206,6 +1206,7 @@ const (
 	RegRuleUndefined RegRuleType = iota
 	RegRuleSameValue
 	RegRuleOffset
+	RegRuleRegister
 )
 
 type RegRule struct {
@@ -1879,6 +1880,7 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 		return offset
 	}
 	if hi2bits == DW_CFA_restore {
+		// TODO: 引数で指定されたレジスタを更新
 		logger.DLog("cfa ins DW_CFA_restore")
 		regNum := low6bits
 		executeCIE(frameStatus, regNum, cieIdx, frameInfo)
@@ -1902,86 +1904,120 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 		// no operand, do nothing
 		break
 	case DW_CFA_set_loc:
-		// no operand
-		// TODO address_size に従う
-		//if dwarfFormat == DWARF_32BIT_FORMAT {
-		//			offset += 4
-		//		} else {
-		//offset += 8
-		//		}
+		//addr, _ := binutil.FromLeToUInt32(Instructions[offset:])
+		offset += 4
+		// TODO copy map
+		/*
+			newFrame := FrameStatus{
+				CFAReg:     frameStatus.CFAReg,
+				Offset:     frameStatus.Offset,
+				Location:   addr,
+				RegRuleMap: copyRegRuleMap(currentFrame.RegRuleMap),
+			}
+		*/
 	case DW_CFA_advance_loc1:
-		// TODO
+		delta := Instructions[offset]
+		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))
 		offset += 1
 	case DW_CFA_advance_loc2:
-		// TODO
+		delta, _ := binutil.FromLeToUInt16(Instructions[offset:])
+		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))
 		offset += 2
 	case DW_CFA_advance_loc4:
-		// TODO
+		delta, _ := binutil.FromLeToUInt32(Instructions[offset:])
+		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))
 		offset += 4
-		/*
-			case DW_CFA_offset_extended:
-				// TODO
-				// Operand1 register
-				_, size := ReaduLEB128(bin[offset:])
-				//fmt.Println(reg)
-				offset += uint64(size)
+	case DW_CFA_offset_extended:
+		// Operand1 register
+		opReg, size := ReaduLEB128(Instructions[offset:])
+		//fmt.Println(opReg)
+		offset += uint64(size)
 
-				// Operand2 offset
-				_, size = ReaduLEB128(bin[offset:])
-				//fmt.Println(op2Offset)
-				offset += uint64(size)
-				break
-			case DW_CFA_restore_extended:
-				// Operand1 register
-				_, size := ReaduLEB128(bin[offset:])
-				offset += uint64(size)
-				break
-			case DW_CFA_undefined:
-				// Operand1 register
-				_, size := ReaduLEB128(bin[offset:])
-				offset += uint64(size)
-				break
-			case DW_CFA_same_value:
-				// Operand1 register
-				_, size := ReaduLEB128(bin[offset:])
-				offset += uint64(size)
-				break
-			case DW_CFA_register:
-				// TODO
-				// Operand1 register
-				_, size := ReaduLEB128(bin[offset:])
-				//fmt.Println(reg)
-				offset += uint64(size)
+		// Operand2 offset
+		opOffset, size := ReaduLEB128(Instructions[offset:])
+		//fmt.Println(opOffset)
+		offset += uint64(size)
 
-				// Operand2 offset
-				_, size = ReaduLEB128(bin[offset:])
-				//fmt.Println(op2Offset)
-				offset += uint64(size)
-				break
-			case DW_CFA_remember_state:
-				break
-			case DW_CFA_restore_state:
-				break
-			case DW_CFA_def_cfa:
-				// TODO
-				// Operand1 register
-				_, size := ReaduLEB128(bin[offset:])
-				offset += uint64(size)
+		regRule, exist := frameStatus.RegRuleMap[uint8(opReg)]
+		regOffset := int32(opOffset * uint64(dataAlignmentFactor))
+		if exist {
+			regRule.RuleType = RegRuleOffset
+			regRule.Offset = regOffset
+			frameStatus.RegRuleMap[uint8(opReg)] = regRule
+		} else {
+			regRule = RegRule{Reg: uint8(opReg), RuleType: RegRuleOffset, Offset: regOffset}
+			frameStatus.RegRuleMap[uint8(opReg)] = regRule
+		}
+	case DW_CFA_restore_extended:
+		// TODO: 引数で指定されたレジスタを更新
+		// 		// Operand1 register
+		_, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+	case DW_CFA_undefined:
+		// Operand1 register
+		reg, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
 
-				// Operand2 offset
-				_, size = ReaduLEB128(bin[offset:])
-				offset += uint64(size)
-			case DW_CFA_def_cfa_register:
-				// Operand2 offset
-				cfa_reg, size := ReaduLEB128(bin[offset:])
-				fmt.Println(cfa_reg)
-				offset += uint64(size)
-			case DW_CFA_def_cfa_offset:
-				// TODO
-				cfaOffset, size := ReaduLEB128(bin[offset:])
-				logger.DLog("cfaOffset:0x%X", cfaOffset)
-				offset += uint64(size)
-		*/
+		regRule, exist := frameStatus.RegRuleMap[uint8(reg)]
+		if exist {
+			regRule.RuleType = RegRuleUndefined
+			frameStatus.RegRuleMap[uint8(reg)] = regRule
+		} else {
+			panic("reg not found...")
+		}
+
+	case DW_CFA_same_value:
+		// Operand1 register
+		reg, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+
+		regRule, exist := frameStatus.RegRuleMap[uint8(reg)]
+		if exist {
+			regRule.RuleType = RegRuleSameValue
+			frameStatus.RegRuleMap[uint8(reg)] = regRule
+		} else {
+			panic("reg not found...")
+		}
+	case DW_CFA_register:
+		// Operand1 register
+		reg1, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+
+		// Operand2 offset
+		reg2, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+		regRule, exist := frameStatus.RegRuleMap[uint8(reg1)]
+		if exist {
+			regRule.RuleType = RegRuleRegister
+			regRule.Reg = uint8(reg2)
+		} else {
+			panic("reg not found...")
+		}
+	case DW_CFA_remember_state:
+		// TODO: stack operation
+	case DW_CFA_restore_state:
+		// TODO: stack operation
+	case DW_CFA_def_cfa:
+		// Operand1 register
+		opReg, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+
+		// Operand2 offset
+		opOffset, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+
+		frameStatus.CFAReg = uint8(opReg)
+		frameStatus.Offset = int32(opOffset)
+	case DW_CFA_def_cfa_register:
+		// Operand1 register
+		reg, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+		frameStatus.CFAReg = uint8(reg)
+	case DW_CFA_def_cfa_offset:
+		// Operand1 Offset
+		opOffset, size := ReaduLEB128(Instructions[offset:])
+		offset += uint64(size)
+		frameStatus.Offset = int32(opOffset)
 	default:
 		logger.DLog("unexpected ins:0x%X", cfaOpcode)
 		panic("unexpected cfa")
