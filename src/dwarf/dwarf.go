@@ -1182,7 +1182,7 @@ type CIE struct {
 	CodeAlignmentFactor   uint64
 	DataAlignmentFactor   int64
 	ReturnAddressRegister uint8
-	Program               []uint8
+	Instructions          []uint8
 }
 
 type FDE struct {
@@ -1192,7 +1192,7 @@ type FDE struct {
 	CIEIdx          uint64
 	InitialLocation uint64
 	AddressRange    uint64
-	Program         []uint8
+	Instructions    []uint8
 }
 
 type Dwarf32FrameInfo struct {
@@ -1220,6 +1220,12 @@ type FrameStatus struct {
 	Offset     int32
 	Location   uint64
 	RegRuleMap map[uint8]RegRule
+}
+
+type FrameTable struct {
+	InitialLocation uint64
+	AddressRange    uint64
+	FrameEntries    []FrameStatus
 }
 
 type Dwarf32Location struct {
@@ -1761,10 +1767,10 @@ func ReadFrameInfo(bin []byte, sectionName string) Dwarf32FrameInfo {
 			// array of DW_CFA_xxx
 			var insPos uint64 = 0
 			insLen := initialLength - uint64(unitComsumedSize)
-			progStart := offset
-			progEnd := uint64(offset + insLen)
-			program := bin[progStart:progEnd]
-			cie.Program = program
+			insStart := offset
+			insEnd := uint64(offset + insLen)
+			instructions := bin[insStart:insEnd]
+			cie.Instructions = instructions
 			for insPos < insLen {
 				insSize := readCFAInstruction(bin[offset:], dwarfFormat)
 				offset += uint64(insSize)
@@ -1834,10 +1840,10 @@ func ReadFrameInfo(bin []byte, sectionName string) Dwarf32FrameInfo {
 			}
 
 			var insTotal uint64 = 0
-			progStart := offset
+			insStart := offset
 			var progLength uint64 = initialLength - uint64(unitComsumedSize)
-			progEnd := offset + progLength
-			fde.Program = bin[progStart:progEnd]
+			insEnd := offset + progLength
+			fde.Instructions = bin[insStart:insEnd]
 			for insTotal < progLength {
 				insSize := readCFAInstruction(bin[offset:], dwarfFormat)
 				insTotal += insSize
@@ -1851,15 +1857,42 @@ func ReadFrameInfo(bin []byte, sectionName string) Dwarf32FrameInfo {
 	return frameInfo
 }
 
-func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8, frameInfo *Dwarf32FrameInfo, cieIdx uint32, codeAlignmentFactor uint32, dataAlignmentFactor int32) (offset uint64) {
-	offset = 0
-	cfaOpcode := Instructions[0]
+func ParseFdes(frameInfo *Dwarf32FrameInfo) map[uint64]FrameTable {
+	frameTableMap := make(map[uint64]FrameTable)
+	for addr, fde := range frameInfo.FDEs {
+		// FDE毎にFrameTableを作成
+		frameTable := ExecuteFde(frameInfo, addr, &fde)
+		frameTableMap[addr] = frameTable
+	}
+
+	return frameTableMap
+}
+
+func ExecuteFde(frameInfo *Dwarf32FrameInfo, addr uint64, fde *FDE) FrameTable {
+	frameTable := FrameTable{InitialLocation: fde.InitialLocation, AddressRange: fde.AddressRange, FrameEntries: []FrameStatus{}}
+	progSize := uint64(len(fde.Instructions))
+	var pos uint64 = 0
+	var frameStatus FrameStatus
+	for pos < progSize {
+		pos += ExecuteCallFrameInstruction(frameInfo, fde, pos, &frameStatus)
+	}
+	return frameTable
+}
+
+func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint64, frameStatus *FrameStatus) uint64 {
+	cieIdx := fde.CIEIdx
+	Instructions := fde.Instructions[pos:]
+	cie := frameInfo.CIEs[cieIdx]
+	codeAlignmentFactor := cie.CodeAlignmentFactor
+	dataAlignmentFactor := cie.DataAlignmentFactor
+	var offset uint64 = 0
+	cfaOpcode := Instructions[offset]
 	offset++
 	hi2bits := (cfaOpcode & 0xC0) >> 6
 	low6bits := cfaOpcode & 0x3F
 	if hi2bits == DW_CFA_advance_loc {
 		logger.DLog("cfa ins DW_CFA_advance_loc")
-		frameStatus.Location += uint64(uint32(low6bits) * codeAlignmentFactor)
+		frameStatus.Location += uint64(uint64(low6bits) * codeAlignmentFactor)
 		return offset
 	}
 	if hi2bits == DW_CFA_offset {
@@ -1882,8 +1915,8 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 	if hi2bits == DW_CFA_restore {
 		// TODO: 引数で指定されたレジスタを更新
 		logger.DLog("cfa ins DW_CFA_restore")
-		regNum := low6bits
-		executeCIE(frameStatus, regNum, cieIdx, frameInfo)
+		//regNum := low6bits
+		//executeCIE(frameStatus, regNum, cieIdx, frameInfo)
 		/*
 			regRule, exist := frameStatus.RegRuleMap[low6bits]
 			if exist {
@@ -2028,7 +2061,7 @@ func ExecuteCallFrameInstruction(frameStatus *FrameStatus, Instructions []uint8,
 func executeCIE(frameStatus *FrameStatus, regNum uint8, cieIdx uint32, frameInfo *Dwarf32FrameInfo) {
 	cie := frameInfo.CIEs[cieIdx]
 	var offset uint64 = 0
-	Instructions := cie.Program
+	Instructions := cie.Instructions
 	cfaOpcode := Instructions[0]
 	offset++
 
