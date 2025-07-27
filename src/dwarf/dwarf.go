@@ -1873,23 +1873,33 @@ func ExecuteFde(frameInfo *Dwarf32FrameInfo, addr uint64, fde *FDE) FrameTable {
 	progSize := uint64(len(fde.Instructions))
 	var pos uint64 = 0
 	var frameStatus FrameStatus
+
+	// initialize FrameStatus by CIE
+	cie := frameInfo.CIEs[fde.CIEIdx]
+	cieInsns := cie.Instructions
+	cieProgSize := uint64(len(cie.Instructions))
+	for pos < cieProgSize {
+		pos += ExecuteCallFrameInstruction(frameInfo, true, fde.CIEIdx, cieInsns[pos:], &frameStatus)
+	}
+
+	// execute fde instructions
+	pos = 0
 	for pos < progSize {
-		pos += ExecuteCallFrameInstruction(frameInfo, fde, pos, &frameStatus)
+		pos += ExecuteCallFrameInstruction(frameInfo, false, fde.CIEIdx, fde.Instructions[pos:], &frameStatus)
 	}
 	return frameTable
 }
 
-func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint64, frameStatus *FrameStatus) uint64 {
-	cieIdx := fde.CIEIdx
-	Instructions := fde.Instructions[pos:]
+func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx uint64, insns []uint8, frameStatus *FrameStatus) uint64 {
 	cie := frameInfo.CIEs[cieIdx]
 	codeAlignmentFactor := cie.CodeAlignmentFactor
 	dataAlignmentFactor := cie.DataAlignmentFactor
+
 	var offset uint64 = 0
-	cfaOpcode := Instructions[offset]
-	offset++
+	cfaOpcode := insns[offset]
 	hi2bits := (cfaOpcode & 0xC0) >> 6
 	low6bits := cfaOpcode & 0x3F
+
 	if hi2bits == DW_CFA_advance_loc {
 		logger.DLog("cfa ins DW_CFA_advance_loc")
 		frameStatus.Location += uint64(uint64(low6bits) * codeAlignmentFactor)
@@ -1897,7 +1907,7 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint
 	}
 	if hi2bits == DW_CFA_offset {
 		logger.DLog("cfa ins DW_CFA_offset")
-		factoredOffset, size := ReaduLEB128(Instructions[offset:])
+		factoredOffset, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 
 		regRule, exist := frameStatus.RegRuleMap[low6bits]
@@ -1949,25 +1959,25 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint
 			}
 		*/
 	case DW_CFA_advance_loc1:
-		delta := Instructions[offset]
+		delta := insns[offset]
 		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))
 		offset += 1
 	case DW_CFA_advance_loc2:
-		delta, _ := binutil.FromLeToUInt16(Instructions[offset:])
+		delta, _ := binutil.FromLeToUInt16(insns[offset:])
 		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))
 		offset += 2
 	case DW_CFA_advance_loc4:
-		delta, _ := binutil.FromLeToUInt32(Instructions[offset:])
+		delta, _ := binutil.FromLeToUInt32(insns[offset:])
 		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))
 		offset += 4
 	case DW_CFA_offset_extended:
 		// Operand1 register
-		opReg, size := ReaduLEB128(Instructions[offset:])
+		opReg, size := ReaduLEB128(insns[offset:])
 		//fmt.Println(opReg)
 		offset += uint64(size)
 
 		// Operand2 offset
-		opOffset, size := ReaduLEB128(Instructions[offset:])
+		opOffset, size := ReaduLEB128(insns[offset:])
 		//fmt.Println(opOffset)
 		offset += uint64(size)
 
@@ -1984,11 +1994,11 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint
 	case DW_CFA_restore_extended:
 		// TODO: 引数で指定されたレジスタを更新
 		// 		// Operand1 register
-		_, size := ReaduLEB128(Instructions[offset:])
+		_, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 	case DW_CFA_undefined:
 		// Operand1 register
-		reg, size := ReaduLEB128(Instructions[offset:])
+		reg, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 
 		regRule, exist := frameStatus.RegRuleMap[uint8(reg)]
@@ -2001,7 +2011,7 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint
 
 	case DW_CFA_same_value:
 		// Operand1 register
-		reg, size := ReaduLEB128(Instructions[offset:])
+		reg, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 
 		regRule, exist := frameStatus.RegRuleMap[uint8(reg)]
@@ -2013,11 +2023,11 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint
 		}
 	case DW_CFA_register:
 		// Operand1 register
-		reg1, size := ReaduLEB128(Instructions[offset:])
+		reg1, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 
 		// Operand2 offset
-		reg2, size := ReaduLEB128(Instructions[offset:])
+		reg2, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 		regRule, exist := frameStatus.RegRuleMap[uint8(reg1)]
 		if exist {
@@ -2032,23 +2042,23 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, fde *FDE, pos uint
 		// TODO: stack operation
 	case DW_CFA_def_cfa:
 		// Operand1 register
-		opReg, size := ReaduLEB128(Instructions[offset:])
+		opReg, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 
 		// Operand2 offset
-		opOffset, size := ReaduLEB128(Instructions[offset:])
+		opOffset, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 
 		frameStatus.CFAReg = uint8(opReg)
 		frameStatus.Offset = int32(opOffset)
 	case DW_CFA_def_cfa_register:
 		// Operand1 register
-		reg, size := ReaduLEB128(Instructions[offset:])
+		reg, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 		frameStatus.CFAReg = uint8(reg)
 	case DW_CFA_def_cfa_offset:
 		// Operand1 Offset
-		opOffset, size := ReaduLEB128(Instructions[offset:])
+		opOffset, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
 		frameStatus.Offset = int32(opOffset)
 	default:
