@@ -263,6 +263,12 @@ func main() {
 	debug_info := targetObj.GetSectionBinByName(".debug_info")
 	dbgInfos := dwarf.ReadDebugInfo(aranges, frameInfo, debug_info, targetObj, offsetLineInfoMap)
 
+	frameTbl := dwarf.ParseFdes(&frameInfo)
+	logger.DLog("frameTbl length:[%d]", len(frameTbl))
+	for _, frameInfo := range frameTbl {
+		logger.DLog("frameInfo.AddressRange:[%d]", frameInfo)
+	}
+
 	cs, err := capstone.New(capstone.CS_ARCH_RISCV, capstone.CS_MODE_RISCVC)
 	if err != nil {
 		logger.ShowErrorMsg("Failed to initialize capstone\n")

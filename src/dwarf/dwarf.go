@@ -1189,7 +1189,7 @@ type FDE struct {
 	DwarfFormat     uint8
 	Length          uint64
 	CIEPointer      uint64
-	CIEIdx          uint64
+	CIEIdx          uint32
 	InitialLocation uint64
 	AddressRange    uint64
 	Instructions    []uint8
@@ -1795,17 +1795,13 @@ func ReadFrameInfo(bin []byte, sectionName string) Dwarf32FrameInfo {
 			// CIE Pointer
 			ciePointer := cieId
 			fde.CIEPointer = ciePointer
-			fde.CIEIdx = ciePointer
 
-			/*
-					// ciePointer means negative offset from related CIE
-					cieOffset := entryOffset - ciePointer
-					cieIdx, exists := ciePointerMap[cieOffset]
-					if !exists {
-						panic("TODO")
-					}
-				fde.CIEIdx = cieIdx
-			*/
+			// ciePointer means negative offset from related CIE
+			cieIdx, exists := ciePointerMap[ciePointer]
+			if !exists {
+				panic("TODO")
+			}
+			fde.CIEIdx = cieIdx
 
 			logger.DLog("CIE_pointer: 0x%X, cieIdx:%d\n", ciePointer, cieIdx)
 
@@ -1873,6 +1869,7 @@ func ExecuteFde(frameInfo *Dwarf32FrameInfo, addr uint64, fde *FDE) FrameTable {
 	progSize := uint64(len(fde.Instructions))
 	var pos uint64 = 0
 	var frameStatus FrameStatus
+	frameStatus.RegRuleMap = make(map[uint8]RegRule)
 
 	// initialize FrameStatus by CIE
 	cie := frameInfo.CIEs[fde.CIEIdx]
@@ -1890,13 +1887,14 @@ func ExecuteFde(frameInfo *Dwarf32FrameInfo, addr uint64, fde *FDE) FrameTable {
 	return frameTable
 }
 
-func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx uint64, insns []uint8, frameStatus *FrameStatus) uint64 {
+func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx uint32, insns []uint8, frameStatus *FrameStatus) uint64 {
 	cie := frameInfo.CIEs[cieIdx]
 	codeAlignmentFactor := cie.CodeAlignmentFactor
 	dataAlignmentFactor := cie.DataAlignmentFactor
 
 	var offset uint64 = 0
 	cfaOpcode := insns[offset]
+	offset++
 	hi2bits := (cfaOpcode & 0xC0) >> 6
 	low6bits := cfaOpcode & 0x3F
 
@@ -1925,6 +1923,7 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx
 	if hi2bits == DW_CFA_restore {
 		// TODO: 引数で指定されたレジスタを更新
 		logger.DLog("cfa ins DW_CFA_restore")
+		panic("DW_CFA_restore not implemented...")
 		//regNum := low6bits
 		//executeCIE(frameStatus, regNum, cieIdx, frameInfo)
 		/*
@@ -1958,6 +1957,7 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx
 				RegRuleMap: copyRegRuleMap(currentFrame.RegRuleMap),
 			}
 		*/
+		panic("DW_CFA_set_loc not implemented...")
 	case DW_CFA_advance_loc1:
 		delta := insns[offset]
 		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))
@@ -1973,12 +1973,10 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx
 	case DW_CFA_offset_extended:
 		// Operand1 register
 		opReg, size := ReaduLEB128(insns[offset:])
-		//fmt.Println(opReg)
 		offset += uint64(size)
 
 		// Operand2 offset
 		opOffset, size := ReaduLEB128(insns[offset:])
-		//fmt.Println(opOffset)
 		offset += uint64(size)
 
 		regRule, exist := frameStatus.RegRuleMap[uint8(opReg)]
@@ -1993,6 +1991,7 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx
 		}
 	case DW_CFA_restore_extended:
 		// TODO: 引数で指定されたレジスタを更新
+		panic("DW_CFA_restore_extended not implemented...")
 		// 		// Operand1 register
 		_, size := ReaduLEB128(insns[offset:])
 		offset += uint64(size)
@@ -2038,8 +2037,10 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx
 		}
 	case DW_CFA_remember_state:
 		// TODO: stack operation
+		panic("DW_CFA_remember_state not implemented...")
 	case DW_CFA_restore_state:
 		// TODO: stack operation
+		panic("DW_CFA_remember_state not implemented...")
 	case DW_CFA_def_cfa:
 		// Operand1 register
 		opReg, size := ReaduLEB128(insns[offset:])
