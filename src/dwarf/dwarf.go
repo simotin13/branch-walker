@@ -1844,6 +1844,31 @@ func ReadFrameInfo(bin []byte, sectionName string) Dwarf32FrameInfo {
 	return frameInfo
 }
 
+func FindFrameStatusByAddr(frameTable *FrameTable, addr uint64) *FrameStatus {
+	var foundFrameStatus *FrameStatus = nil
+	frameEntries := frameTable.FrameEntries
+	if len(frameEntries) < 1 {
+		return nil
+	}
+	frame := frameEntries[0]
+	curLocation := frame.Location
+	if curLocation < addr {
+		return nil
+	}
+	if curLocation == addr {
+		return &frame
+	}
+
+	for _, frameStatus := range frameEntries[1:] {
+		if addr <= frameStatus.Location {
+			foundFrameStatus = &frameStatus
+		} else {
+			break
+		}
+	}
+	return foundFrameStatus
+}
+
 func ParseFdes(frameInfo *Dwarf32FrameInfo) map[uint64]FrameTable {
 	frameTableMap := make(map[uint64]FrameTable)
 	for addr, fde := range frameInfo.FDEs {
@@ -1860,6 +1885,7 @@ func ExecuteFde(frameInfo *Dwarf32FrameInfo, addr uint64, fde *FDE) FrameTable {
 	progSize := uint64(len(fde.Instructions))
 	var pos uint64 = 0
 	var frameStatus FrameStatus
+	frameStatus.Location = fde.InitialLocation
 	frameStatus.RegRuleMap = make(map[uint8]RegRule)
 	var frameStack []FrameStatus
 
@@ -1870,11 +1896,17 @@ func ExecuteFde(frameInfo *Dwarf32FrameInfo, addr uint64, fde *FDE) FrameTable {
 	for pos < cieProgSize {
 		pos += ExecuteCallFrameInstruction(frameInfo, true, fde.CIEIdx, cieInsns[pos:], &frameStatus, &frameStack)
 	}
+	frameTable.FrameEntries = append(frameTable.FrameEntries, frameStatus)
 
 	// execute fde instructions
 	pos = 0
+	curLoc := frameStatus.Location
 	for pos < progSize {
 		pos += ExecuteCallFrameInstruction(frameInfo, false, fde.CIEIdx, fde.Instructions[pos:], &frameStatus, &frameStack)
+		if curLoc != frameStatus.Location {
+			frameTable.FrameEntries = append(frameTable.FrameEntries, frameStatus)
+		}
+		curLoc = frameStatus.Location
 	}
 	return frameTable
 }
@@ -1937,18 +1969,20 @@ func ExecuteCallFrameInstruction(frameInfo *Dwarf32FrameInfo, isCIE bool, cieIdx
 		// no operand, do nothing
 		break
 	case DW_CFA_set_loc:
-		//addr, _ := binutil.FromLeToUInt32(Instructions[offset:])
+		loc, _ := binutil.FromLeToUInt32(insns[offset:])
 		offset += 4
-		// TODO copy map
-		/*
-			newFrame := FrameStatus{
-				CFAReg:     frameStatus.CFAReg,
-				Offset:     frameStatus.Offset,
-				Location:   addr,
-				RegRuleMap: copyRegRuleMap(currentFrame.RegRuleMap),
-			}
-		*/
-		panic("DW_CFA_set_loc not implemented...")
+		// deep copy
+		tmpRegRuleMap := make(map[uint8]RegRule)
+		for k, v := range frameStatus.RegRuleMap {
+			tmpRegRuleMap[k] = v
+		}
+		newFrame := FrameStatus{
+			CFAReg:     frameStatus.CFAReg,
+			Offset:     frameStatus.Offset,
+			Location:   uint64(loc),
+			RegRuleMap: tmpRegRuleMap,
+		}
+		*frameStatus = newFrame
 	case DW_CFA_advance_loc1:
 		delta := insns[offset]
 		frameStatus.Location += uint64(uint64(delta) * uint64(codeAlignmentFactor))

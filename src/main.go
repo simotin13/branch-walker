@@ -349,11 +349,16 @@ func main() {
 		basicBlk, exist := funcSlice.BasicBlks[elfFuncInfo.Addr]
 		if exist {
 			for _, relatedOperand := range basicBlk.RelatedOperands {
+				frameInfo := frameTbl[elfFuncInfo.Addr]
+				frameStatus := dwarf.FindFrameStatusByAddr(&frameInfo, elfFuncInfo.Addr)
+				if frameStatus != nil {
+					logger.DLog("frameStatus found")
+				} else {
+					logger.ELog("frameStatus not found")
+				}
 				logger.ShowErrorMsg("RegName:[%s], RegNum:[%d]\n", relatedOperand.RegName, relatedOperand.RegNum)
 				if relatedOperand.HasValue {
 					logger.ShowErrorMsg("LinkValue Type:[%d]\n", relatedOperand.LinkValueType)
-				} else {
-					logger.ShowErrorMsg("\n")
 				}
 			}
 		} else {
